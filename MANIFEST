@@ -8,4 +8,4 @@ X86/FormatText.pm
 X86/FormatTree.pm
 X86/MemRegion.pm
 disasm
-test.pl
+t/1.t

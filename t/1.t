@@ -4,8 +4,7 @@
 #########################
 
 use Test::More tests => 459;
-use Disassemble::X86;
-ok(1, "Load module");
+BEGIN { use_ok("Disassemble::X86") }
 
 #########################
 
@@ -38,15 +37,15 @@ my @text = (
   [0, 0,  "lahf",        qw(9f)],
   [0, 0,  "leave",       qw(c9)],
   [0, 16, "ret",         qw(c3)],
-  [0, 32, "retd 0x1234", qw(c2 34 12)],
+  [0, 32, "ret 0x1234",  qw(c2 34 12)],
   [0, 16, "retf 0x5678", qw(ca 78 56)],
-  [0, 32, "retfd",       qw(cb)],
+  [0, 32, "retf",        qw(cb)],
 
   # move
   [0,  0,  "mov cl,dh",                   qw(88 f1)],
   [16, 16, "mov word[bx+di+0x49],di",     qw(89 79 49)],
   [32, 0,  "mov dh,byte[eax+0xfe67bdb2]", qw(8a b0 b2 bd 67 fe)],
-  [32, 32, "mov ebp,dword[ebp+0x17]",     qw(8b 6d 17)],
+  [32, 32, "mov ebp,dword[ss:ebp+0x17]",  qw(8b 6d 17)],
   [16, 0,  "mov word[si+0x2123],ss",      qw(8c 94 23 21)],
   [0,  0,  "mov es,si",                   qw(8e c6)],
   [32, 0,  "mov al,byte[0x58166c84]",     qw(a0 84 6c 16 58)],
@@ -67,8 +66,8 @@ my @text = (
   [16, 16, "mov word[bx+di+0x30],sp",     qw(89 61 30)],
   [16, 32, "or dword[si+0x11],ebp",       qw(09 6c 11)],
   [0,  0,  "sbb al,ch",                   qw(1a c5)],
-  [32, 16, "sub bp,word[ebp+0xe55ac0ea]", qw(2b ad ea c0 5a e5)],
-  [32, 32, "xor esi,dword[edx+ecx+0xa]",  qw(33 74 11 0a)],
+  [32, 16, "sub bp,word[ss:ebp+0xe55ac0ea]", qw(2b ad ea c0 5a e5)],
+  [32, 32, "xor esi,dword[ecx+edx*1+0xa]",   qw(33 74 11 0a)],
   [16, 0,  "and byte[bx+si+0x8eda],0xdf", qw(80 a0 da 8e df)],
   [0,  16, "xor di,0x9289",               qw(81 f7 89 92)],
   [32, 32, "or dword[eax],0x1867327f",    qw(81 08 7f 32 67 18)],
@@ -113,7 +112,7 @@ my @text = (
   [32, 16, "bt word[edx],dx",               qw(0f a3 12)],
   [0,  32, "bts edi,esi",                   qw(0f ab f7)],
   [16, 16, "btc word[ss:bp+0x75],0x9f",     qw(0f ba 7e 75 9f)],
-  [32, 32, "btr dword[ebp+0xa0ca131d],0x7", qw(0f ba b5 1d 13 ca a0 07)],
+  [32, 32, "btr dword[ss:ebp+0xa0ca131d],0x7", qw(0f ba b5 1d 13 ca a0 07)],
 
   # string ops
   [16, 0,  "repne cmps byte[si],byte[es:di]", qw(f2 a6)],
@@ -126,7 +125,7 @@ my @text = (
 
   # address ops
   [16, 16, "lds dx,far[0x5b6a]",            qw(c5 16 6a 5b)],
-  [32, 32, "lss ebx,far32[ebp+0x484b56bc]", qw(0f b2 9d bc 56 4b 48)],
+  [32, 32, "lss ebx,far32[ss:ebp+0x484b56bc]", qw(0f b2 9d bc 56 4b 48)],
   [32, 16, "les dx,far[edi]",               qw(c4 17)],
   [32, 32, "lfs eax,far32[0x287aaceb]",     qw(0f b4 05 eb ac 7a 28)],
   [16, 32, "lgs eax,far32[ss:bp+0x88ea]",   qw(0f b5 86 ea 88)],
@@ -148,15 +147,15 @@ my @text = (
   [0,  32, "in eax,dx",   qw(ed)],
 
   # access control
-  [16, 0,  "arpl word[ss:bp+di+0x36],bx",       qw(63 5b 36)],
-  [16, 16, "lar bx,word[ss:bp+di+0x18]",        qw(0f 02 5b 18)],
-  [32, 32, "lar eax,dword[eax+edx+0xfffffff8]", qw(0f 02 44 02 f8)],
-  [16, 0,  "lgdt [ss:bp+di]",                   qw(0f 01 13)],
-  [32, 0,  "lidt [edx]",                        qw(0f 01 1a)],
-  [32, 0,  "lldt word[eax]",                    qw(0f 00 10)],
-  [16, 0,  "lmsw word[bx+si+0xffb7]",           qw(0f 01 70 b7)],
-  [32, 16, "lsl bp,word[edx+0xdf6af51e]",       qw(0f 03 aa 1e f5 6a df)],
-  [16, 32, "lsl eax,dword[bx+di+0xdc23]",       qw(0f 03 81 23 dc)],
+  [16, 0,  "arpl word[ss:bp+di+0x36],bx",         qw(63 5b 36)],
+  [16, 16, "lar bx,word[ss:bp+di+0x18]",          qw(0f 02 5b 18)],
+  [32, 32, "lar eax,dword[edx+eax*1+0xfffffff8]", qw(0f 02 44 02 f8)],
+  [16, 0,  "lgdt [ss:bp+di]",                     qw(0f 01 13)],
+  [32, 0,  "lidt [edx]",                          qw(0f 01 1a)],
+  [32, 0,  "lldt word[eax]",                      qw(0f 00 10)],
+  [16, 0,  "lmsw word[bx+si+0xffb7]",             qw(0f 01 70 b7)],
+  [32, 16, "lsl bp,word[edx+0xdf6af51e]",         qw(0f 03 aa 1e f5 6a df)],
+  [16, 32, "lsl eax,dword[bx+di+0xdc23]",         qw(0f 03 81 23 dc)],
 
   # simple floating-point ops
   [0, 0, "f2xm1",   qw(d9 f0)],
@@ -196,7 +195,7 @@ my @text = (
   [16, 0, "ficom st0,dword[bx+di+0xdf55]",  qw(da 91 55 df)],
   [0,  0, "fcmove st0,st7",                 qw(da cf)],
   [0,  0, "fcomi st0,st3",                  qw(db f3)],
-  [32, 0, "fistp dword[ebp+0xd887ab8f]",    qw(db 9d 8f ab 87 d8)],
+  [32, 0, "fistp dword[ss:ebp+0xd887ab8f]", qw(db 9d 8f ab 87 d8)],
   [16, 0, "fcomp st0,qword[di]",            qw(dc 1d)],
   [0,  0, "fsub st6,st0",                   qw(dc ee)],
   [0,  0, "fst st3",                        qw(dd d3)],
@@ -204,11 +203,11 @@ my @text = (
   [0,  0, "fsubrp st1,st0",                 qw(de e1)],
   [0,  0, "fcompp st0,st1",                 qw(de d9)],
   [16, 0, "fidiv st0,word[si]",             qw(de 34)],
-  [32, 0, "fbld tbyte[edi*2+ebp+0x12]",     qw(df 64 7d 12)],
+  [32, 0, "fbld tbyte[ss:ebp+edi*2+0x12]",  qw(df 64 7d 12)],
   [0,  0, "fcomip st0,st1",                 qw(df f1)],
 
   # mmx/xmm/3dnow
-  [32, 0, "ldmxcsr dword[ebp+0x3dfdb73e]",        qw(0f ae 95 3e b7 fd 3d)],
+  [32, 0, "ldmxcsr dword[ss:ebp+0x3dfdb73e]",     qw(0f ae 95 3e b7 fd 3d)],
   [0,  0, "pfmul mm1,mm2",                        qw(0f 0f ca b4)],
   [32, 0, "movups xmm6,dqword[edi+0x35]",         qw(0f 10 77 35)],
   [16, 0, "movsd qword[bx+0xfffb],xmm3",          qw(f2 0f 11 5f fb)],
@@ -225,7 +224,7 @@ my @text = (
   [32, 0, "cvtsd2ss xmm4,qword[esi]",             qw(f2 0f 5a 26)],
   [16, 0, "cvtdq2ps xmm2,dqword[di+0xb37f]",      qw(0f 5b 95 7f b3)],
   [0,  0, "punpcklqdq xmm4,xmm1",                 qw(66 0f 6c e1)],
-  [32, 0, "movd mm0,dword[edx*2+ebx+0x29]",       qw(0f 6e 44 53 29)],
+  [32, 0, "movd mm0,dword[ebx+edx*2+0x29]",       qw(0f 6e 44 53 29)],
   [16, 0, "movd dword[bx],xmm2",                  qw(66 0f 7e 17)],
   [32, 0, "movdqu xmm5,dqword[ebx+0xffffffc3]",   qw(f3 0f 6f 6b c3)],
   [0,  0, "psraw mm0,0xb",                        qw(0f 71 e0 0b)],
@@ -244,26 +243,26 @@ my @text = (
   [16, 0, "movq qword[bx+di],xmm4",               qw(66 0f d6 21)],
   [0,  0, "pextrw ecx,mm6,0x2",                   qw(0f c5 ce 02)],
   [0,  0, "pinsrw mm2,ecx,0x1",                   qw(0f c4 d1 01)],
-  [32, 0, "pshufw mm1,qword[ebp+0x3a],0x60",      qw(0f 70 4d 3a 60)],
+  [32, 0, "pshufw mm1,qword[ss:ebp+0x3a],0x60",   qw(0f 70 4d 3a 60)],
   [0,  0, "shufpd xmm4,xmm7,0x5b",                qw(66 0f c6 e7 5b)],
   [16, 0, "cmpneqss xmm1,dword[ss:bp+di+0x38]",   qw(f3 0f c2 4b 38 04)],
 
   # misc
   [32, 32, "bound edi,[0xc6cd9909]",            qw(62 3d 09 99 cd c6)],
   [16, 16, "bound si,[ss:bp+0x5d18]",           qw(62 b6 18 5d)],
-  [32, 0,  "clflush [ebp*8+esi+0x1e415eed]",    qw(0f ae bc ee ed 5e 41 1e)],
+  [32, 0,  "clflush [esi+ebp*8+0x1e415eed]",    qw(0f ae bc ee ed 5e 41 1e)],
   [32, 32, "cmove edx,dword[esi]",              qw(0f 44 16)],
   [16, 16, "cmovpo cx,word[0xafb2]",            qw(0f 4b 0e b2 af)],
   [0,  0,  "cmpxchg dl,bh",                     qw(0f b0 fa)],
   [32, 32, "cmpxchg dword[ecx+0xffffffa2],esp", qw(0f b1 61 a2)],
   [16, 16, "lock cmpxchg word[di+0xef9a],sp",   qw(f0 0f b1 a5 9a ef)],
-  [32, 0,  "cmpxchg8b qword[ebp+0xae9c8628]",   qw(0f c7 8d 28 86 9c ae)],
+  [32, 0,  "cmpxchg8b qword[ss:ebp+0xae9c8628]", qw(0f c7 8d 28 86 9c ae)],
   [0,  0,  "enter 0xba7e,0x57",                 qw(c8 7e ba 57)],
   [0,  0,  "mov cr0,ebx",                       qw(0f 22 c3)],
   [0,  0,  "mov ecx,dr7",                       qw(0f 21 f9)],
   [16, 0,  "invlpg [ds:bp+di]",                 qw(3e 0f 01 3b)],
   [0,  0,  "lfence",                            qw(0f ae eb)],
-  [32, 0,  "ltr word[ebp*2+ecx+0xffffffc2]",    qw(0f 00 5c 69 c2)],
+  [32, 0,  "ltr word[ecx+ebp*2+0xffffffc2]",    qw(0f 00 5c 69 c2)],
   [32, 0,  "setl byte[edi+0x7a]",               qw(0f 9c 6f 7a)],
   [16, 0,  "xlat byte[cs:bx]",                  qw(2e d7)],
 );

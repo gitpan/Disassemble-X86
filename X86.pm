@@ -7,35 +7,43 @@ use AutoLoader qw( AUTOLOAD );
 use integer;
 use Disassemble::X86::MemRegion;
 
-our $VERSION = "0.10";
+use vars qw( $VERSION );
+$VERSION = "0.11";
 
-our $max_instr_len = 15;
+use vars qw( $max_instr_len );
+$max_instr_len = 15;
 
-our @long_regs   = qw( eax ecx edx ebx esp ebp esi edi );
-our @word_regs   = qw(  ax  cx  dx  bx  sp  bp  si  di );
-our @byte_regs   = qw(  al  cl  dl  bl  ah  ch  dh  bh );
-our @seg_regs    = qw( es cs ss ds fs gs );
-our @immed_grp   = qw( add or adc sbb and sub xor cmp );
-our @shift_grp   = qw( rol ror rcl rcr shl shr xxx sar );
-our @unary_grp   = qw( test test not neg mul imul div idiv );
-our @bittst_grp  = qw( bt bts btr btc );
-our @float_op    = qw( add mul com comp sub subr div divr );
-our @floatr_op   = qw( add mul com comp subr sub divr div );
-our @prefetch_op = qw( nta t0 t1 t2 );
-our @cond_code   = qw( o no b ae e ne be a s ns pe po l ge le g );
-our @sse_cmp     = qw( eq lt le unord neq nlt nle ord );
+use vars qw( @long_regs @word_regs @byte_regs @seg_regs );
+@long_regs = qw( eax ecx edx ebx esp ebp esi edi );
+@word_regs = qw(  ax  cx  dx  bx  sp  bp  si  di );
+@byte_regs = qw(  al  cl  dl  bl  ah  ch  dh  bh );
+@seg_regs  = qw(  es  cs  ss  ds  fs  gs );
 
-use constant MMX_PROC    => 995;
-use constant TDNOW_PROC  => 996;
-use constant TDNOW2_PROC => 997;
-use constant SSE_PROC    => 998;
-use constant SSE2_PROC   => 999;
-my %proc_xlat = (
-    MMX_PROC()    => "mmx",
-    TDNOW_PROC()  => "3dnow",
-    TDNOW2_PROC() => "3dnow-e",
-    SSE_PROC()    => "sse",
-    SSE2_PROC()   => "sse2",
+use vars qw( @immed_grp @shift_grp @unary_grp @bittst_grp
+    @float_op @floatr_op @prefetch_op @cond_code @sse_comp );
+@immed_grp   = qw( add or adc sbb and sub xor cmp );
+@shift_grp   = qw( rol ror rcl rcr shl shr xxx sar );
+@unary_grp   = qw( test xxx not neg mul imul div idiv );
+@bittst_grp  = qw( bt bts btr btc );
+@float_op    = qw( add mul com comp sub subr div divr );
+@floatr_op   = qw( add mul com comp subr sub divr div );
+@prefetch_op = qw( nta t0 t1 t2 );
+@cond_code   = qw( o no b ae e ne be a s ns pe po l ge le g );
+@sse_comp    = qw( eq lt le unord neq nlt nle ord );
+
+use vars qw( $mmx_proc $tdnow_proc $tdnow2_proc $sse_proc $sse2_proc
+    %proc_xlat );
+$mmx_proc    = 995;
+$tdnow_proc  = 996;
+$tdnow2_proc = 997;
+$sse_proc    = 998;
+$sse2_proc   = 999;
+%proc_xlat = (
+    $mmx_proc    => "mmx",
+    $tdnow_proc  => "3dnow",
+    $tdnow2_proc => "3dnow-e",
+    $sse_proc    => "sse",
+    $sse2_proc   => "sse2",
 );
 
 sub new {
@@ -145,7 +153,7 @@ sub disasm {
   $self->{error} and undef $op;
   $self->{op} = $op;
   if ($op) {
-    my $proc     = $op->{proc};
+    my $proc     = $op->{proc} || 0;
     my $def_proc = $self->{def_proc};
     $proc = $def_proc if $proc < $def_proc;
     $op->{proc}  = $proc_xlat{$proc} || $proc;
@@ -227,40 +235,9 @@ sub get_val {
   return { op=>"lit", arg=>[$val], size=>$size };
 } # get_val
 
-sub reg_op {
-  my ($self, $op, $byte) = @_;
-  return make_op($op, [$self->get_reg($byte & 7)]);
-} # reg_op
-
-sub seg_op {
-  my ($self, $op, $seg, $proc) = @_;
-  return make_op($op, [$self->seg_reg($seg)], $proc);
-} # seg_op
-
-sub seg_pre {
-  my ($self, $seg, $proc) = @_;
-  $self->{seg_pre} = $self->seg_reg($seg);
-  my $op = $self->_disasm();
-  $self->{seg_pre} = undef;
-  $op->{proc} = $proc if $op && $proc && $op->{proc} < $proc;
-  return $op;
-} # seg_pre
-
-sub load_far {
-  my ($self, $seg, $proc) = @_;
-  my ($mod, $reg, $rm) = $self->split_next_byte();
-  my $src = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
-  return make_op("l$seg", [$self->get_reg($reg), $src], $proc);
-} # load_far
-
-sub lit_op {
-  my ($self, $op, $size, $proc) = @_;
-  return make_op($op, [$self->get_val($size)], $proc);
-} # lit_op
-
 sub iflong_op {
-  my ($self, $if, $else) = @_;
-  return make_op($self->{data_size} == 32 ? $if : $else);
+  my ($self, $if, $else, $proc) = @_;
+  return { op=>($self->{data_size} == 32 ? $if : $else), proc=>$proc }
 } # iflong_op
 
 sub op_r_rm {
@@ -268,7 +245,7 @@ sub op_r_rm {
   my ($mod, $reg, $rm) = $self->split_next_byte();
   my $src  = $self->modrm($mod, $rm, $size);
   my $dest = $self->get_reg($reg, $size);
-  return make_op($op, [$dest,$src], $proc);
+  return { op=>$op, arg=>[$dest, $src], proc=>$proc };
 } # op_r_rm
 
 sub op_rm_r {
@@ -276,7 +253,7 @@ sub op_rm_r {
   my ($mod, $reg, $rm) = $self->split_next_byte();
   my $src  = $self->get_reg($reg, $size);
   my $dest = $self->modrm($mod, $rm, $size);
-  return make_op($op, [$dest,$src], $proc);
+  return { op=>$op, arg=>[$dest,$src], proc=>$proc };
 } # op_rm_r
 
 sub mov_imm {
@@ -284,7 +261,7 @@ sub mov_imm {
   my ($mod, $op, $rm) = $self->split_next_byte();
   return $self->bad_op() unless $op == 0;
   my $dest = $self->modrm($mod, $rm, $size);
-  return make_op("mov", [$dest, $self->get_val($size)]);
+  return { op=>"mov", arg=>[$dest, $self->get_val($size)] };
 } # mov_imm
 
 sub unary_op {
@@ -292,10 +269,10 @@ sub unary_op {
   my ($mod, $op, $rm) = $self->split_next_byte();
   my $arg = $self->modrm($mod, $rm, $size);
   if ($op == 0) {
-    return make_op("test", [$arg,$self->get_val($size)]);
+    return { op=>"test", arg=>[$arg, $self->get_val($size)] };
   }
   elsif ($op == 1) { return $self->bad_op() }
-  else { return make_op($unary_grp[$op], [$arg]) }
+  else { return { op=>$unary_grp[$op], arg=>[$arg] } }
 } # unary_op
 
 sub abs_addr {
@@ -308,8 +285,8 @@ sub abs_addr {
   return  { op=>"mem", arg=>[$addr], size=>$data_size };
 } # abs_addr
 
-sub eipbyte_op {
-  my ($self, $op, @args) = @_;
+sub eipbyte {
+  my ($self) = @_;
   my $off = $self->next_byte();
   $off |= 0xffffff00 if $off & 0x80;
   $off += $self->{pos};
@@ -317,11 +294,10 @@ sub eipbyte_op {
   if    ($size == 32) { $off &= 0xffffffff }
   elsif ($size == 16) { $off &= 0xffff }
   else { die "can't happen" }
-  $off = { op=>"lit", arg=>[$off], size=>$size };
-  return make_op($op, [$off, @args]);
-} # eipbyte_op
+  return { op=>"lit", arg=>[$off], size=>$size };
+} # eipbyte
 
-sub eipoff_op {
+sub eipoff {
   my ($self, $op, $proc) = @_;
   my $size = $self->{data_size};
   my $off;
@@ -334,17 +310,26 @@ sub eipoff_op {
     $off = ($off + $self->{pos}) & 0xffff;
   }
   else { die "can't happen" }
-  $off = { op=>"lit", arg=>[$off], size=>$size };
-  return make_op($op, [$off], $proc);
-} # eipoff_op
+  return { op=>"lit", arg=>[$off], size=>$size };
+} # eipoff
 
-sub far_addr {
+sub jcond_op {
+  my ($self, $cond, $addr, $proc) = @_;
+  my $arg = [$addr];
+  my $seg = $self->{seg_pre};
+  if    (!$seg)     { }
+  elsif ($seg == 1) { push @$arg, {op=>"hint_no"};  $self->{seg_pre} = undef }
+  elsif ($seg == 3) { push @$arg, {op=>"hint_yes"}; $self->{seg_pre} = undef }
+  return { op=>"j" . $cond_code[$cond & 0xf], arg=>$arg, proc=>$proc };
+} # jcond_op
+
+sub seg_prefix {
   my ($self) = @_;
-  my $size = $self->{data_size};
-  my $off = ($size == 32) ? $self->next_long() : $self->next_word();
-  my $seg = $self->next_word();
-  return { op=>"farlit", arg=>[$seg, $off], size=>$size+16 };
-} # far_addr
+  my $prefix = $self->{seg_pre};
+  return undef unless defined $prefix;
+  $self->{seg_pre} = undef;
+  return $self->seg_reg($prefix);
+} # seg_prefix
 
 sub toggle_size {
   my ($size) = @_;
@@ -352,22 +337,6 @@ sub toggle_size {
   return 32 if $size eq 16;
   die "can't happen";
 } # toggle_size
-
-sub seg_prefix {
-  my ($self) = @_;
-  my $prefix = $self->{seg_pre};
-  $self->{seg_pre} = undef;
-  return $prefix;
-} # seg_prefix
-
-sub make_op {
-  my ($op, $arg, $proc) = @_;
-  return {
-      op   => $op,
-      arg  => $arg,
-      proc => $proc || 0,
-  };
-} # make_op
 
 1 # end X86.pm
 __END__
@@ -583,252 +552,195 @@ sub _disasm {
   use strict;
   use warnings;
   use integer;
-  our (@cond_code, @immed_grp);
   my ($self) = @_;
   my $byte = $self->next_byte();
   if    ($byte >= 0x00 && $byte <= 0x05) {
-    return $self->arith_op("add", $byte);
-  }
-  elsif ($byte == 0x06) { return $self->seg_op("push", 0) } # es
-  elsif ($byte == 0x07) { return $self->seg_op("pop",  0) } # es
+    return $self->arith_op("add", $byte) }
+  elsif ($byte == 0x06) { return {op=>"push", arg=>[$self->seg_reg(0)]} } # es
+  elsif ($byte == 0x07) { return {op=>"pop",  arg=>[$self->seg_reg(0)]} } # es
   elsif ($byte >= 0x08 && $byte <= 0x0d) {
-    return $self->arith_op("or", $byte);
-  }
-  elsif ($byte == 0x0e) { return $self->seg_op("push", 1) } # cs
+    return $self->arith_op("or", $byte) }
+  elsif ($byte == 0x0e) { return {op=>"push", arg=>[$self->seg_reg(1)]} } # cs
   elsif ($byte == 0x0f) { return $self->twobyte() }
   elsif ($byte >= 0x10 && $byte <= 0x15) {
-    return $self->arith_op("adc", $byte);
-  }
-  elsif ($byte == 0x16) { return $self->seg_op("push", 2) } # ss
-  elsif ($byte == 0x17) { return $self->seg_op("pop",  2) } # ss
+    return $self->arith_op("adc", $byte) }
+  elsif ($byte == 0x16) { return {op=>"push", arg=>[$self->seg_reg(2)]} } # ss
+  elsif ($byte == 0x17) { return {op=>"pop",  arg=>[$self->seg_reg(2)]} } # ss
   elsif ($byte >= 0x18 && $byte <= 0x1d) {
-    return $self->arith_op("sbb", $byte);
-  }
-  elsif ($byte == 0x1e) { return $self->seg_op("push", 3) } # ds
-  elsif ($byte == 0x1f) { return $self->seg_op("pop",  3) } # ds
+    return $self->arith_op("sbb", $byte) }
+  elsif ($byte == 0x1e) { return {op=>"push", arg=>[$self->seg_reg(3)]} } # ds
+  elsif ($byte == 0x1f) { return {op=>"pop",  arg=>[$self->seg_reg(3)]} } # ds
   elsif ($byte >= 0x20 && $byte <= 0x25) {
-    return $self->arith_op("and", $byte);
-  }
+    return $self->arith_op("and", $byte) }
   elsif ($byte == 0x26) { return $self->seg_pre(0) } # es
-  elsif ($byte == 0x27) { return make_op("daa") }
+  elsif ($byte == 0x27) { return { op=>"daa" } }
   elsif ($byte >= 0x28 && $byte <= 0x2d) {
-    return $self->arith_op("sub", $byte);
-  }
-  elsif ($byte == 0x2e) {
-    my $op = $self->seg_pre(1); # cs
-    if ($op && $op->{op} =~ /^j[^m]/) {
-      push @{$op->{arg}}, { op=>"hint_no" };
-    }
-    return $op;
-  }
-  elsif ($byte == 0x2f) { return make_op("das") }
+    return $self->arith_op("sub", $byte) }
+  elsif ($byte == 0x2e) { return $self->seg_pre(1) } # cs
+  elsif ($byte == 0x2f) { return { op=>"das" } }
   elsif ($byte >= 0x30 && $byte <= 0x35) {
-    return $self->arith_op("xor", $byte);
-  }
+    return $self->arith_op("xor", $byte) }
   elsif ($byte == 0x36) { return $self->seg_pre(2) } # ss
-  elsif ($byte == 0x37) { return make_op("aaa") }
+  elsif ($byte == 0x37) { return { op=>"aaa" } }
   elsif ($byte >= 0x38 && $byte <= 0x3d) {
-    return $self->arith_op("cmp", $byte);
-  }
-  elsif ($byte == 0x3e) {
-    my $op = $self->seg_pre(3); # ds
-    if ($op && $op->{op} =~ /^j[^m]/) {
-      push @{$op->{arg}}, { op=>"hint_yes" };
-    }
-    return $op;
-  }
-  elsif ($byte == 0x3f) { return make_op("aas") }
+    return $self->arith_op("cmp", $byte) }
+  elsif ($byte == 0x3e) { return $self->seg_pre(3) } # ds
+  elsif ($byte == 0x3f) { return { op=>"aas" } }
   elsif ($byte >= 0x40 && $byte <= 0x47) {
-    return $self->reg_op("inc", $byte);
-  }
+    return { op=>"inc", arg=>[$self->get_reg($byte&7)] } }
   elsif ($byte >= 0x48 && $byte <= 0x4f) {
-    return $self->reg_op("dec", $byte);
-  }
+    return { op=>"dec", arg=>[$self->get_reg($byte&7)] } }
   elsif ($byte >= 0x50 && $byte <= 0x57) {
-    return $self->reg_op("push", $byte);
-  }
+    return { op=>"push", arg=>[$self->get_reg($byte&7)] } }
   elsif ($byte >= 0x58 && $byte <= 0x5f) {
-    return $self->reg_op("pop", $byte);
-  }
+    return { op=>"pop", arg=>[$self->get_reg($byte&7)] } }
   elsif ($byte == 0x60) { return $self->iflong_op("pushad", "pusha", 186) }
   elsif ($byte == 0x61) { return $self->iflong_op("popad",  "popa",  186) }
   elsif ($byte == 0x62) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $bound = $self->modrm($mod, $rm, $self->{data_size}*2, {op=>""});
-    return make_op("bound", [$self->get_reg($reg), $bound], 186);
+    return { op=>"bound", arg=>[$self->get_reg($reg), $bound], proc=>186 };
   }
   elsif ($byte == 0x63) { return $self->op_rm_r("arpl", 16, 286) }
-  elsif ($byte == 0x64) { return $self->seg_pre(4, 386) } # fs
-  elsif ($byte == 0x65) { return $self->seg_pre(5, 386) } # gs
-  elsif ($byte == 0x66) { return $self->size_op("data_size") }
-  elsif ($byte == 0x67) { return $self->size_op("addr_size") }
-  elsif ($byte == 0x68) { return $self->lit_op("push", undef, 186) }
+  elsif ($byte == 0x64) { return $self->seg_pre(4) } # fs
+  elsif ($byte == 0x65) { return $self->seg_pre(5) } # gs
+  elsif ($byte == 0x66) { return $self->size_pre("data_size") }
+  elsif ($byte == 0x67) { return $self->size_pre("addr_size") }
+  elsif ($byte == 0x68) {
+    return { op=>"push", arg=>[$self->get_val()], proc=>186 } }
   elsif ($byte == 0x69) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->get_reg($reg);
     my $src  = $self->modrm($mod, $rm);
-    return make_op("imul", [$dest,$src,$self->get_val()], 186);
+    return { op=>"imul", arg=>[$dest,$src,$self->get_val()], proc=>186 };
   }
   elsif ($byte == 0x6a) {
-    return make_op("push", [$self->get_byteval()], 186);
-  }
+    return { op=>"push", arg=>[$self->get_byteval()], proc=>186 } }
   elsif ($byte == 0x6b) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->get_reg($reg);
     my $src  = $self->modrm($mod, $rm);
-    return make_op("imul", [$dest,$src,$self->get_byteval()], 186);
+    return { op=>"imul", arg=>[$dest,$src,$self->get_byteval()], proc=>186 };
   }
   elsif ($byte == 0x6c) {
     my $dest = $self->str_dest(8);
-    return make_op("ins", [$dest, $self->get_reg(2,16)], 186);
+    return { op=>"ins", arg=>[$dest, $self->get_reg(2,16)], proc=>186 };
   }
   elsif ($byte == 0x6d) {
     my $dest = $self->str_dest();
-    return make_op("ins", [$dest, $self->get_reg(2,16)], 186);
+    return { op=>"ins", arg=>[$dest, $self->get_reg(2,16)], proc=>186 };
   }
   elsif ($byte == 0x6e) {
     my $src = $self->str_src(8);
-    return make_op("outs", [$self->get_reg(2,16), $src], 186);
+    return { op=>"outs", arg=>[$self->get_reg(2,16), $src], proc=>186 };
   }
   elsif ($byte == 0x6f) {
     my $src = $self->str_src();
-    return make_op("outs", [$self->get_reg(2,16), $src], 186);
+    return { op=>"outs", arg=>[$self->get_reg(2,16), $src], proc=>186 };
   }
   elsif ($byte >= 0x70 && $byte <= 0x7f) {
-    return $self->eipbyte_op("j" . $cond_code[$byte & 0xf]);
-  }
+    return $self->jcond_op($byte, $self->eipbyte()) }
   elsif ($byte == 0x80 || $byte == 0x82) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm, 8);
-    return make_op($immed_grp[$op], [$dest,$self->get_val(8)]);
+    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_val(8)] };
   }
   elsif ($byte == 0x81) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
-    return make_op($immed_grp[$op], [$dest,$self->get_val()]);
+    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_val()] };
   }
   elsif ($byte == 0x83) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
-    return make_op($immed_grp[$op], [$dest,$self->get_byteval()]);
+    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_byteval()] };
   }
   elsif ($byte == 0x84) { return $self->op_rm_r("test", 8) }
   elsif ($byte == 0x85) { return $self->op_rm_r("test") }
   elsif ($byte == 0x86) { return $self->op_r_rm("xchg", 8) }
   elsif ($byte == 0x87) { return $self->op_r_rm("xchg") }
   elsif ($byte >= 0x88 && $byte <= 0x8b) {
-    return $self->arith_op("mov", $byte);
-  }
+    return $self->arith_op("mov", $byte) }
   elsif ($byte == 0x8c) {
     my ($mod, $seg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm, 16);
     my $proc = ($seg >= 4) ? 386 : 86;
-    return make_op("mov", [$dest,$self->seg_reg($seg)], $proc);
+    return { op=>"mov", arg=>[$dest,$self->seg_reg($seg)], proc=>$proc };
   }
   elsif ($byte == 0x8d) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $arg = $self->modrm($mod, $rm, 0);
-    return make_op("lea", [$self->get_reg($reg),$arg]);
+    return { op=>"lea", arg=>[$self->get_reg($reg),$arg] };
   }
   elsif ($byte == 0x8e) {
     my ($mod, $seg, $rm) = $self->split_next_byte();
     my $src  = $self->modrm($mod, $rm, 16);
     my $proc = ($seg >= 4) ? 386 : 86;
-    return make_op("mov", [$self->seg_reg($seg),$src], $proc);
+    return { op=>"mov", arg=>[$self->seg_reg($seg),$src], proc=>$proc };
   }
   elsif ($byte == 0x8f) {
     my ($mod, $op, $rm) = $self->split_next_byte();
-    return make_op("pop", [$self->modrm($mod, $rm)]);
+    return { op=>"pop", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($byte == 0x90) {
     my $mmx_pre = $self->mmx_prefix();
-    return make_op("nop")   if $mmx_pre == 0;
-    return make_op("pause") if $mmx_pre == 3;
+    return {op=>"nop"}   if $mmx_pre == 0;
+    return {op=>"pause"} if $mmx_pre == 3;
     return $self->bad_op();
   }
   elsif ($byte >= 0x91 && $byte <= 0x97) {
     my $reg1 = $self->get_reg(0);
     my $reg2 = $self->get_reg($byte & 7);
-    return make_op("xchg", [$reg1,$reg2]);
+    return { op=>"xchg", arg=>[$reg1,$reg2] };
   }
   elsif ($byte == 0x98) { return $self->iflong_op("cwde", "cbw") }
   elsif ($byte == 0x99) { return $self->iflong_op("cdq",  "cwd") }
-  elsif ($byte == 0x9a) { return make_op("call", [$self->far_addr()]) }
-  elsif ($byte == 0x9b) { return make_op("fwait", undef, 87) }
+  elsif ($byte == 0x9a) { return { op=>"call", arg=>[$self->far_addr()] } }
+  elsif ($byte == 0x9b) { return { op=>"fwait", proc=>87 } }
   elsif ($byte == 0x9c) { return $self->iflong_op("pushfd", "pushf") }
   elsif ($byte == 0x9d) { return $self->iflong_op("popfd",  "popf") }
-  elsif ($byte == 0x9e) { return make_op("sahf") }
-  elsif ($byte == 0x9f) { return make_op("lahf") }
+  elsif ($byte == 0x9e) { return { op=>"sahf" } }
+  elsif ($byte == 0x9f) { return { op=>"lahf" } }
   elsif ($byte == 0xa0) {
-    return make_op("mov", [$self->get_reg(0,8), $self->abs_addr(8)]);
-  }
+    return { op=>"mov", arg=>[$self->get_reg(0,8), $self->abs_addr(8)] } }
   elsif ($byte == 0xa1) {
-    return make_op("mov", [$self->get_reg(0), $self->abs_addr()]);
-  }
+    return { op=>"mov", arg=>[$self->get_reg(0), $self->abs_addr()] } }
   elsif ($byte == 0xa2) {
-    return make_op("mov", [$self->abs_addr(8), $self->get_reg(0,8)]);
-  }
+    return { op=>"mov", arg=>[$self->abs_addr(8), $self->get_reg(0,8)] } }
   elsif ($byte == 0xa3) {
-    return make_op("mov", [$self->abs_addr(), $self->get_reg(0)]);
-  }
+    return { op=>"mov", arg=>[$self->abs_addr(), $self->get_reg(0)] } }
   elsif ($byte == 0xa4) {
-    my $src  = $self->str_src(8);
-    my $dest = $self->str_dest(8);
-    return make_op("movs", [$dest,$src]);
-  }
+    return { op=>"movs", arg=>[$self->str_dest(8), $self->str_src(8)] } }
   elsif ($byte == 0xa5) {
-    my $src  = $self->str_src();
-    my $dest = $self->str_dest();
-    return make_op("movs", [$dest,$src]);
-  }
+    return { op=>"movs", arg=>[$self->str_dest(), $self->str_src()] } }
   elsif ($byte == 0xa6) {
-    my $src  = $self->str_src(8);
-    my $dest = $self->str_dest(8);
-    return make_op("cmps", [$src,$dest]);
-  }
+    return { op=>"cmps", arg=>[$self->str_src(8), $self->str_dest(8)] } }
   elsif ($byte == 0xa7) {
-    my $src  = $self->str_src();
-    my $dest = $self->str_dest();
-    return make_op("cmps", [$src,$dest]);
-  }
+    return { op=>"cmps", arg=>[$self->str_src(), $self->str_dest()] } }
   elsif ($byte == 0xa8) {
-    return make_op("test", [$self->get_reg(0,8),$self->get_val(8)]);
-  }
+    return { op=>"test", arg=>[$self->get_reg(0,8), $self->get_val(8)] } }
   elsif ($byte == 0xa9) {
-    return make_op("test", [$self->get_reg(0),$self->get_val()]);
-  }
-  elsif ($byte == 0xaa) {
-    return make_op("stos", [$self->str_dest(8)]);
-  }
-  elsif ($byte == 0xab) {
-    return make_op("stos", [$self->str_dest()]);
-  }
-  elsif ($byte == 0xac) {
-    return make_op("lods", [$self->str_src(8)]);
-  }
-  elsif ($byte == 0xad) {
-    return make_op("lods", [$self->str_src()]);
-  }
-  elsif ($byte == 0xae) {
-    return make_op("scas", [$self->str_dest(8)]);
-  }
-  elsif ($byte == 0xaf) {
-    return make_op("scas", [$self->str_dest()]);
-  }
+    return { op=>"test", arg=>[$self->get_reg(0), $self->get_val()] } }
+  elsif ($byte == 0xaa) { return { op=>"stos", arg=>[$self->str_dest(8)] } }
+  elsif ($byte == 0xab) { return { op=>"stos", arg=>[$self->str_dest()] } }
+  elsif ($byte == 0xac) { return { op=>"lods", arg=>[$self->str_src(8)] } }
+  elsif ($byte == 0xad) { return { op=>"lods", arg=>[$self->str_src()] } }
+  elsif ($byte == 0xae) { return { op=>"scas", arg=>[$self->str_dest(8)] } }
+  elsif ($byte == 0xaf) { return { op=>"scas", arg=>[$self->str_dest()] } }
   elsif ($byte >= 0xb0 && $byte <= 0xb7) {
     my $reg = $self->get_reg($byte & 7, 8);
-    return make_op("mov", [$reg,$self->get_val(8)]);
+    return { op=>"mov", arg=>[$reg,$self->get_val(8)] };
   }
   elsif ($byte >= 0xb8 && $byte <= 0xbf) {
     my $reg = $self->get_reg($byte & 7);
-    return make_op("mov", [$reg,$self->get_val()]);
+    return { op=>"mov", arg=>[$reg,$self->get_val()] };
   }
   elsif ($byte == 0xc0) { return $self->shift_op(undef, 8) }
   elsif ($byte == 0xc1) { return $self->shift_op(undef) }
   elsif ($byte == 0xc2) {
-    return $self->lit_op($self->{data_size} == 32 ? "retd" : "ret", 16);
-  }
-  elsif ($byte == 0xc3) { return $self->iflong_op("retd", "ret") }
+    return { op=>"ret", size=>$self->{data_size}, arg=>[$self->get_val(16)] } }
+  elsif ($byte == 0xc3) {
+    return { op=>"ret", size=>$self->{data_size} } }
   elsif ($byte == 0xc4) { return $self->load_far("es") }
   elsif ($byte == 0xc5) { return $self->load_far("ds") }
   elsif ($byte == 0xc6) { return $self->mov_imm(8) }
@@ -836,25 +748,24 @@ sub _disasm {
   elsif ($byte == 0xc8) {
     my $immw = $self->get_val(16);
     my $immb = $self->get_val(8);
-    return make_op("enter", [$immw,$immb], 186);
+    return { op=>"enter", arg=>[$immw,$immb], proc=>186 };
   }
-  elsif ($byte == 0xc9) { return make_op("leave", undef, 186) }
+  elsif ($byte == 0xc9) { return { op=>"leave", proc=>186 } }
   elsif ($byte == 0xca) {
-    return $self->lit_op($self->{data_size} == 32 ? "retfd" : "retf", 16)
-  }
-  elsif ($byte == 0xcb) { return $self->iflong_op("retfd", "retf") }
+    return {op=>"retf", size=>$self->{data_size}, arg=>[$self->get_val(16)]} }
+  elsif ($byte == 0xcb) {
+    return {op=>"retf", size=>$self->{data_size}} }
   elsif ($byte == 0xcc) {
-    return make_op("int", [{ op=>"lit", arg=>[3], size=>8 }]);
-  }
-  elsif ($byte == 0xcd) { return $self->lit_op("int", 8) }
-  elsif ($byte == 0xce) { return make_op("into") }
+    return { op=>"int", arg=>[{ op=>"lit", arg=>[3], size=>8 }] } }
+  elsif ($byte == 0xcd) { return {op=>"int", arg=>[$self->get_val(8)]} }
+  elsif ($byte == 0xce) { return {op=>"into"} }
   elsif ($byte == 0xcf) { return $self->iflong_op("iretd", "iret") }
   elsif ($byte == 0xd0) { return $self->shift_op(1, 8) }
   elsif ($byte == 0xd1) { return $self->shift_op(1) }
   elsif ($byte == 0xd2) { return $self->shift_op("cl", 8) }
   elsif ($byte == 0xd3) { return $self->shift_op("cl") }
-  elsif ($byte == 0xd4) { return $self->lit_op("aam", 8) }
-  elsif ($byte == 0xd5) { return $self->lit_op("aad", 8) }
+  elsif ($byte == 0xd4) { return {op=>"aam", arg=>[$self->get_val(8)]} }
+  elsif ($byte == 0xd5) { return {op=>"aad", arg=>[$self->get_val(8)]} }
   elsif ($byte == 0xd6) { return $self->bad_op() }
   elsif ($byte == 0xd7) { return $self->xlat_op() }
   elsif ($byte == 0xd8) { return $self->esc_d8() }
@@ -866,56 +777,45 @@ sub _disasm {
   elsif ($byte == 0xde) { return $self->esc_de() }
   elsif ($byte == 0xdf) { return $self->esc_df() }
   elsif ($byte == 0xe0) {
-    return $self->eipbyte_op("loopnz", $self->get_reg(1, $self->{addr_size}));
-  }
+    return {op=>"loopne", arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
   elsif ($byte == 0xe1) {
-    return $self->eipbyte_op("loopz", $self->get_reg(1, $self->{addr_size}));
-  }
+    return {op=>"loope",  arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
   elsif ($byte == 0xe2) {
-    return $self->eipbyte_op("loop", $self->get_reg(1, $self->{addr_size}));
-  }
+    return {op=>"loop",   arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
   elsif ($byte == 0xe3) {
-    return $self->eipbyte_op($self->{addr_size} == 32 ? "jecxz" : "jcxz");
+    my $op = $self->{addr_size} == 32 ? "jecxz" : "jcxz";
+    return { op=>$op, arg=>[$self->eipbyte()] };
   }
   elsif ($byte == 0xe4) {
-    return make_op("in", [$self->get_reg(0,8), $self->get_val(8)]);
-  }
+    return { op=>"in", arg=>[$self->get_reg(0,8), $self->get_val(8)] } }
   elsif ($byte == 0xe5) {
-    return make_op("in", [$self->get_reg(0), $self->get_val(8)]);
-  }
+    return { op=>"in", arg=>[$self->get_reg(0), $self->get_val(8)] } }
   elsif ($byte == 0xe6) {
-    return make_op("out", [$self->get_val(8), $self->get_reg(0,8)]);
-  }
+    return { op=>"out", arg=>[$self->get_val(8), $self->get_reg(0,8)] } }
   elsif ($byte == 0xe7) {
-    return make_op("out", [$self->get_val(8), $self->get_reg(0)]);
-  }
-  elsif ($byte == 0xe8) { return $self->eipoff_op("call") }
-  elsif ($byte == 0xe9) { return $self->eipoff_op("jmp") }
-  elsif ($byte == 0xea) { return make_op("jmp", [$self->far_addr()]) }
-  elsif ($byte == 0xeb) { return $self->eipbyte_op("jmp") }
+    return { op=>"out", arg=>[$self->get_val(8), $self->get_reg(0)] } }
+  elsif ($byte == 0xe8) { return { op=>"call", arg=>[$self->eipoff()] } }
+  elsif ($byte == 0xe9) { return { op=>"jmp", arg=>[$self->eipoff()] } }
+  elsif ($byte == 0xea) { return { op=>"jmp", arg=>[$self->far_addr()] } }
+  elsif ($byte == 0xeb) { return { op=>"jmp", arg=>[$self->eipbyte()] } }
   elsif ($byte == 0xec) {
-    return make_op("in", [$self->get_reg(0,8), $self->get_reg(2,16)]);
-  }
+    return { op=>"in", arg=>[$self->get_reg(0,8), $self->get_reg(2,16)] } }
   elsif ($byte == 0xed) {
-    return make_op("in", [$self->get_reg(0), $self->get_reg(2,16)]);
-  }
+    return { op=>"in", arg=>[$self->get_reg(0), $self->get_reg(2,16)] } }
   elsif ($byte == 0xee) {
-    return make_op("out", [$self->get_reg(2,16), $self->get_reg(0,8)]);
-  }
+    return { op=>"out", arg=>[$self->get_reg(2,16), $self->get_reg(0,8)] } }
   elsif ($byte == 0xef) {
-    return make_op("out", [$self->get_reg(2,16), $self->get_reg(0)]);
-  }
+    return { op=>"out", arg=>[$self->get_reg(2,16), $self->get_reg(0)] } }
   elsif ($byte == 0xf0) {
-    my $op = $self->_disasm();
-    return undef unless defined $op;
-    return make_op("lock", [$op]);
+    my $op = $self->_disasm() or return;
+    return { op=>"lock", arg=>[$op] };
   }
   elsif ($byte == 0xf1) { return $self->bad_op() }
   elsif ($byte == 0xf2) {
     $self->{mmx_pre} = 2;
     my $op = $self->_disasm();
     return $op unless $self->mmx_prefix() && $op;
-    return make_op("repne", [ $op, $self->get_reg(1, $self->{addr_size}) ]);
+    return { op=>"repne", arg=>[$op], size=>$self->{addr_size} };
   }
   elsif ($byte == 0xf3) {
     $self->{mmx_pre} = 3;
@@ -923,18 +823,18 @@ sub _disasm {
     return $op unless $self->mmx_prefix() && $op;
     my $instr = $op->{op};
     my $rep = ($instr eq "cmps" || $instr eq "scas") ? "repe" : "rep";
-    return make_op($rep, [ $op, $self->get_reg(1, $self->{addr_size}) ]);
+    return { op=>$rep, arg=>[$op], size=>$self->{addr_size} };
   }
-  elsif ($byte == 0xf4) { return make_op("hlt") }
-  elsif ($byte == 0xf5) { return make_op("cmc") }
+  elsif ($byte == 0xf4) { return {op=>"hlt"} }
+  elsif ($byte == 0xf5) { return {op=>"cmc"} }
   elsif ($byte == 0xf6) { return $self->unary_op(8) }
   elsif ($byte == 0xf7) { return $self->unary_op() }
-  elsif ($byte == 0xf8) { return make_op("clc") }
-  elsif ($byte == 0xf9) { return make_op("stc") }
-  elsif ($byte == 0xfa) { return make_op("cli") }
-  elsif ($byte == 0xfb) { return make_op("sti") }
-  elsif ($byte == 0xfc) { return make_op("cld") }
-  elsif ($byte == 0xfd) { return make_op("std") }
+  elsif ($byte == 0xf8) { return {op=>"clc"} }
+  elsif ($byte == 0xf9) { return {op=>"stc"} }
+  elsif ($byte == 0xfa) { return {op=>"cli"} }
+  elsif ($byte == 0xfb) { return {op=>"sti"} }
+  elsif ($byte == 0xfc) { return {op=>"cld"} }
+  elsif ($byte == 0xfd) { return {op=>"std"} }
   elsif ($byte == 0xfe) { return $self->opgrp_fe(8) }
   elsif ($byte == 0xff) { return $self->opgrp_fe() }
   die "can't happen";
@@ -963,35 +863,33 @@ sub modrm {
     if ($rm == 4) {
       my ($scale, $index, $base) = $self->split_next_byte();
       if ($index != 4) {
+        $scale = { op=>"lit", arg=>[1<<$scale], size=>32 };
         $index = $self->get_reg($index, 32);
-        if ($scale) {
-          $scale = { op=>"lit", arg=>[1<<$scale],     size=>32 };
-          $index = { op=>"*",   arg=>[$index,$scale], size=>32 };
-        }
-        push @addr, $index;
+        push @addr, { op=>"*", arg=>[$index, $scale], size=>32 };
       }
       $rm = $base;
     }
-    push @addr, ($mod == 0 && $rm == 5)
-        ? $self->get_val(32) : $self->get_reg($rm, 32);
+    if ($mod == 0 && $rm == 5) {
+      push @addr, $self->get_val(32);
+    }
+    else {
+      unshift @addr, $self->get_reg($rm, 32);
+      $seg ||= $self->seg_reg(2) if $rm == 4 || $rm == 5; # ss
+    }
   } # addr_size 32
   elsif ($addr_size == 16) {
     if    ($rm == 0) {
-      push @addr, $self->get_reg(3, 16); # bx
-      push @addr, $self->get_reg(6, 16); # si
+      push @addr, $self->get_reg(3, 16), $self->get_reg(6, 16); # bx+si
     }
     elsif ($rm == 1) {
-      push @addr, $self->get_reg(3, 16); # bx
-      push @addr, $self->get_reg(7, 16); # di
+      push @addr, $self->get_reg(3, 16), $self->get_reg(7, 16); # bx+di
     }
     elsif ($rm == 2) {
-      push @addr, $self->get_reg(5, 16); # bp
-      push @addr, $self->get_reg(6, 16); # si
+      push @addr, $self->get_reg(5, 16), $self->get_reg(6, 16); # bp+si
       $seg ||= $self->seg_reg(2); # ss
     }
     elsif ($rm == 3) {
-      push @addr, $self->get_reg(5, 16); # bp
-      push @addr, $self->get_reg(7, 16); # di
+      push @addr, $self->get_reg(5, 16), $self->get_reg(7, 16); # bp+di
       $seg ||= $self->seg_reg(2); # ss
     }
     elsif ($rm == 4) { push @addr, $self->get_reg(6, 16) } # si
@@ -1012,7 +910,7 @@ sub modrm {
   my $addr = (@addr == 1) ? $addr[0] :
       { op=>"+", arg=>\@addr, size=>$addr_size };
   $addr = { op=>"seg", arg=>[$seg,$addr], size=>$addr_size } if $seg;
-  return { op=>"mem", arg=>[$addr,@hint], size=>$data_size };
+  return  { op=>"mem", arg=>[$addr,@hint], size=>$data_size };
 } # modrm
 
 sub arith_op {
@@ -1020,52 +918,49 @@ sub arith_op {
   use warnings;
   use integer;
   my ($self, $op, $byte) = @_;
+  $op = { op=>$op };
   $byte &= 7;
   if ($byte == 0) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    return make_op($op,
-        [ $self->modrm($mod, $rm, 8), $self->get_reg($reg, 8) ]);
+    $op->{arg} = [ $self->modrm($mod, $rm, 8), $self->get_reg($reg, 8) ];
   }
   elsif ($byte == 1) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    return make_op($op,
-        [ $self->modrm($mod, $rm), $self->get_reg($reg) ]);
+    $op->{arg} = [ $self->modrm($mod, $rm), $self->get_reg($reg) ];
   }
   elsif ($byte == 2) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    return make_op($op,
-        [ $self->get_reg($reg, 8), $self->modrm($mod, $rm, 8) ]);
+    $op->{arg} = [ $self->get_reg($reg, 8), $self->modrm($mod, $rm, 8) ];
   }
   elsif ($byte == 3) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    return make_op($op,
-        [ $self->get_reg($reg), $self->modrm($mod, $rm) ]);
+    $op->{arg} = [ $self->get_reg($reg), $self->modrm($mod, $rm) ];
   }
   elsif ($byte == 4) {
-    return make_op($op, [ $self->get_reg(0, 8), $self->get_val(8) ]);
+    $op->{arg} = [ $self->get_reg(0, 8), $self->get_val(8) ];
   }
   elsif ($byte == 5) {
-    return make_op($op, [ $self->get_reg(0), $self->get_val() ]);
+    $op->{arg} = [ $self->get_reg(0), $self->get_val() ];
   }
-  die "can't happen";
+  else { die "can't happen" }
+  return $op;
 } # arith_op
 
 sub shift_op {
   use strict;
   use warnings;
   use integer;
-  our @shift_grp;
-  my ($self, $dist, $size, $proc) = @_;
+  my ($self, $dist, $size) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   return $self->bad_op() if $op == 6;
   my $arg = $self->modrm($mod, $rm, $size);
   $dist = $self->next_byte() unless $dist;
   if ($dist eq "cl") { $dist = $self->get_reg(1, 8) }
   else { $dist = { op=>"lit", arg=>[$dist], size=>8 } }
-  return make_op($shift_grp[$op], [$arg,$dist], $proc);
+  return { op=>$shift_grp[$op], arg=>[$arg,$dist] };
 } # shift_op
 
-sub size_op {
+sub size_pre {
   use strict;
   use warnings;
   use integer;
@@ -1076,15 +971,50 @@ sub size_op {
   my $op = $self->_disasm();
   $self->{mmx_pre} = 0;
   $self->{$size} = $old_size;
-  $op->{proc} = 386 if $op && $op->{proc} < 386;
+  $op->{proc} = 386 if $op && ($op->{proc}||0) < 386;
   return $op;
-} # size_op
+} # size_pre
+
+sub seg_pre {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self, $seg) = @_;
+  $self->{seg_pre} = $seg;
+  my $op = $self->_disasm() or return;
+  $op->{proc} = 386 if $seg>=4 && ($op->{proc}||0) < 386;
+  if (defined $self->{seg_pre}) {
+    $self->{seg_pre} = undef;
+    $op = { op=>$seg_regs[$seg].":", arg=>[$op], proc=>delete($op->{proc}) };
+  }
+  return $op;
+} # seg_pre
+
+sub far_addr {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self) = @_;
+  my $size = $self->{data_size};
+  my $off = ($size == 32) ? $self->next_long() : $self->next_word();
+  my $seg = $self->next_word();
+  return { op=>"farlit", arg=>[$seg, $off], size=>$size+16 };
+} # far_addr
+
+sub load_far {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self, $seg, $proc) = @_;
+  my ($mod, $reg, $rm) = $self->split_next_byte();
+  my $src = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
+  return { op=>"l$seg", arg=>[$self->get_reg($reg), $src], proc=>$proc };
+} # load_far
 
 sub get_reg {
   use strict;
   use warnings;
   use integer;
-  our (@long_regs, @word_regs, @byte_regs);
   my ($self, $num, $size) = @_;
   $size ||= $self->{data_size};
   if ($size == 32) {
@@ -1115,7 +1045,6 @@ sub seg_reg {
   use strict;
   use warnings;
   use integer;
-  our @seg_regs;
   my ($self, $num) = @_;
   if ($num > 5) {
     $self->{error} = "bad segment register";
@@ -1136,11 +1065,10 @@ sub esc_d8 {
   use strict;
   use warnings;
   use integer;
-  our @float_op;
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   my $src = ($mod == 3) ? fp_reg($rm) : $self->modrm($mod, $rm, 32);
-  return make_op("f".$float_op[$op], [fp_reg(0), $src], 87);
+  return { op=>"f".$float_op[$op], arg=>[fp_reg(0), $src], proc=>87 };
 } # esc_d8
 
 sub esc_d9 {
@@ -1151,68 +1079,63 @@ sub esc_d9 {
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod != 3) {
     if    ($op == 0) {
-      return make_op("fld",  [$self->modrm($mod, $rm, 32)], 87);
-    }
+      return { op=>"fld",  arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
     elsif ($op == 2) {
-      return make_op("fst",  [$self->modrm($mod, $rm, 32)], 87);
-    }
+      return { op=>"fst",  arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
     elsif ($op == 3) {
-      return make_op("fstp", [$self->modrm($mod, $rm, 32)], 87);
-    }
+      return { op=>"fstp", arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
     elsif ($op == 4) {
       my $src = $self->modrm($mod, $rm, $self->{data_size} * 7);
-      return make_op("fldenv", [$src], 87);
+      return { op=>"fldenv", arg=>[$src], proc=>87 };
     }
     elsif ($op == 5) {
-      return make_op("fldcw",  [$self->modrm($mod, $rm, 16)], 87);
+      return { op=>"fldcw", arg=>[$self->modrm($mod, $rm, 16)], proc=>87 };
     }
     elsif ($op == 6) {
       my $dest = $self->modrm($mod, $rm, $self->{data_size} * 7);
-      return make_op("fnstenv", [$dest], 87);
+      return { op=>"fnstenv", arg=>[$dest], proc=>87 };
     }
     elsif ($op == 7) {
-      return make_op("fnstcw",  [$self->modrm($mod, $rm, 16)], 87);
-    }
+      return { op=>"fnstcw", arg=>[$self->modrm($mod, $rm, 16)], proc=>87 } }
   }
-  elsif ($op == 0) { return make_op("fld", [fp_reg($rm)], 87) }
+  elsif ($op == 0) { return { op=>"fld", arg=>[fp_reg($rm)], proc=>87 } }
   elsif ($op == 1) {
-    return make_op("fxch", [fp_reg(0), fp_reg($rm)], 87);
-  }
-  elsif ($op == 2 && $rm == 0) { return make_op("fnop", undef, 87) }
+    return { op=>"fxch", arg=>[fp_reg(0), fp_reg($rm)], proc=>87 } }
+  elsif ($op == 2 && $rm == 0) { return { op=>"fnop", proc=>87 } }
   elsif ($op == 4) {
-    if    ($rm == 0) { return make_op("fchs", undef, 87) }
-    elsif ($rm == 1) { return make_op("fabs", undef, 87) }
-    elsif ($rm == 4) { return make_op("ftst", undef, 87) }
-    elsif ($rm == 5) { return make_op("fxam", undef, 87) }
+    if    ($rm == 0) { return { op=>"fchs", proc=>87 } }
+    elsif ($rm == 1) { return { op=>"fabs", proc=>87 } }
+    elsif ($rm == 4) { return { op=>"ftst", proc=>87 } }
+    elsif ($rm == 5) { return { op=>"fxam", proc=>87 } }
   }
   elsif ($op == 5) {
-    if    ($rm == 0) { return make_op("fld1",   undef, 87) }
-    elsif ($rm == 1) { return make_op("fldl2t", undef, 87) }
-    elsif ($rm == 2) { return make_op("fldl2e", undef, 87) }
-    elsif ($rm == 3) { return make_op("fldpi",  undef, 87) }
-    elsif ($rm == 4) { return make_op("fldlg2", undef, 87) }
-    elsif ($rm == 5) { return make_op("fldln2", undef, 87) }
-    elsif ($rm == 6) { return make_op("fldz",   undef, 87) }
+    if    ($rm == 0) { return { op=>"fld1",   proc=>87 } }
+    elsif ($rm == 1) { return { op=>"fldl2t", proc=>87 } }
+    elsif ($rm == 2) { return { op=>"fldl2e", proc=>87 } }
+    elsif ($rm == 3) { return { op=>"fldpi",  proc=>87 } }
+    elsif ($rm == 4) { return { op=>"fldlg2", proc=>87 } }
+    elsif ($rm == 5) { return { op=>"fldln2", proc=>87 } }
+    elsif ($rm == 6) { return { op=>"fldz",   proc=>87 } }
   }
   elsif ($op == 6) {
-    if    ($rm == 0) { return make_op("f2xm1",   undef, 87) }
-    elsif ($rm == 1) { return make_op("fyl2x",   undef, 87) }
-    elsif ($rm == 2) { return make_op("fptan",   undef, 87) }
-    elsif ($rm == 3) { return make_op("fpatan",  undef, 87) }
-    elsif ($rm == 4) { return make_op("fxtract", undef, 87) }
-    elsif ($rm == 5) { return make_op("fprem1",  undef, 387) }
-    elsif ($rm == 6) { return make_op("fdecstp", undef, 87) }
-    elsif ($rm == 7) { return make_op("fincstp", undef, 87) }
+    if    ($rm == 0) { return { op=>"f2xm1",   proc=>87  } }
+    elsif ($rm == 1) { return { op=>"fyl2x",   proc=>87  } }
+    elsif ($rm == 2) { return { op=>"fptan",   proc=>87  } }
+    elsif ($rm == 3) { return { op=>"fpatan",  proc=>87  } }
+    elsif ($rm == 4) { return { op=>"fxtract", proc=>87  } }
+    elsif ($rm == 5) { return { op=>"fprem1",  proc=>387 } }
+    elsif ($rm == 6) { return { op=>"fdecstp", proc=>87  } }
+    elsif ($rm == 7) { return { op=>"fincstp", proc=>87  } }
   }
   elsif ($op == 7) {
-    if    ($rm == 0) { return make_op("fprem",   undef, 87) }
-    elsif ($rm == 1) { return make_op("fyl2xp1", undef, 87) }
-    elsif ($rm == 2) { return make_op("fsqrt",   undef, 87) }
-    elsif ($rm == 3) { return make_op("fsincos", undef, 387) }
-    elsif ($rm == 4) { return make_op("frndint", undef, 87) }
-    elsif ($rm == 5) { return make_op("fscale",  undef, 87) }
-    elsif ($rm == 6) { return make_op("fsin",    undef, 387) }
-    elsif ($rm == 7) { return make_op("fcos",    undef, 387) }
+    if    ($rm == 0) { return { op=>"fprem",   proc=>87  } }
+    elsif ($rm == 1) { return { op=>"fyl2xp1", proc=>87  } }
+    elsif ($rm == 2) { return { op=>"fsqrt",   proc=>87  } }
+    elsif ($rm == 3) { return { op=>"fsincos", proc=>387 } }
+    elsif ($rm == 4) { return { op=>"frndint", proc=>87  } }
+    elsif ($rm == 5) { return { op=>"fscale",  proc=>87  } }
+    elsif ($rm == 6) { return { op=>"fsin",    proc=>387 } }
+    elsif ($rm == 7) { return { op=>"fcos",    proc=>387 } }
   }
   return $self->bad_op();
 } # esc_d9
@@ -1221,28 +1144,22 @@ sub esc_da {
   use strict;
   use warnings;
   use integer;
-  our @float_op;
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod != 3) {
     my $src = $self->modrm($mod, $rm, 32);
-    return make_op("fi".$float_op[$op], [fp_reg(0), $src], 87);
+    return { op=>"fi".$float_op[$op], arg=>[fp_reg(0), $src], proc=>87 };
   }
   elsif ($op == 0) {
-    return make_op("fcmovb",  [fp_reg(0), fp_reg($rm)], 686);
-  }
+    return { op=>"fcmovb",  arg=>[fp_reg(0), fp_reg($rm)], proc=>686 } }
   elsif ($op == 1) {
-    return make_op("fcmove",  [fp_reg(0), fp_reg($rm)], 686);
-  }
+    return { op=>"fcmove",  arg=>[fp_reg(0), fp_reg($rm)], proc=>686 } }
   elsif ($op == 2) {
-    return make_op("fcmovbe", [fp_reg(0), fp_reg($rm)], 686);
-  }
+    return { op=>"fcmovbe", arg=>[fp_reg(0), fp_reg($rm)], proc=>686 } }
   elsif ($op == 3) {
-    return make_op("fcmovu",  [fp_reg(0), fp_reg($rm)], 686);
-  }
+    return { op=>"fcmovu",  arg=>[fp_reg(0), fp_reg($rm)], proc=>686 } }
   elsif ($op == 5 && $rm == 1) {
-    return make_op("fucompp", [fp_reg(0), fp_reg(1)],   387);
-  }
+    return { op=>"fucompp", arg=>[fp_reg(0), fp_reg(1)],   proc=>387 } }
   return $self->bad_op();
 } # esc_da
 
@@ -1254,43 +1171,32 @@ sub esc_db {
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod == 3) {
     if    ($op == 0) {
-      return make_op("fcmovnb",  [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fcmovnb",  arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
     elsif ($op == 1) {
-      return make_op("fcmovne",  [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fcmovne",  arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
     elsif ($op == 2) {
-      return make_op("fcmovnbe", [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fcmovnbe", arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
     elsif ($op == 3) {
-      return make_op("fcmovnbu", [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fcmovnbu", arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
     elsif ($op == 4) {
-      if    ($rm == 2) { return make_op("fnclex", undef, 87) }
-      elsif ($rm == 3) { return make_op("fninit", undef, 87) }
+      if    ($rm == 2) { return { op=>"fnclex", proc=>87 } }
+      elsif ($rm == 3) { return { op=>"fninit", proc=>87 } }
     }
     elsif ($op == 5) {
-      return make_op("fucomi", [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fucomi", arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
     elsif ($op == 6) {
-      return make_op("fcomi",  [fp_reg(0),fp_reg($rm)], 686);
-    }
+      return { op=>"fcomi",  arg=>[fp_reg(0),fp_reg($rm)], proc=>686 } }
   }
   elsif ($op == 0) {
-    return make_op("fild",  [$self->modrm($mod, $rm, 32)], 87);
-  }
+    return { op=>"fild",  arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
   elsif ($op == 2) {
-    return make_op("fist",  [$self->modrm($mod, $rm, 32)], 87);
-  }
+    return { op=>"fist",  arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
   elsif ($op == 3) {
-    return make_op("fistp", [$self->modrm($mod, $rm, 32)], 87);
-  }
+    return { op=>"fistp", arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
   elsif ($op == 5) {
-    return make_op("fld",   [$self->modrm($mod, $rm, 80)], 87);
-  }
+    return { op=>"fld",   arg=>[$self->modrm($mod, $rm, 80)], proc=>87 } }
   elsif ($op == 7) {
-    return make_op("fstp",  [$self->modrm($mod, $rm, 80)], 87);
-  }
+    return { op=>"fstp",  arg=>[$self->modrm($mod, $rm, 80)], proc=>87 } }
   return $self->bad_op();
 } # esc_db
 
@@ -1298,15 +1204,14 @@ sub esc_dc {
   use strict;
   use warnings;
   use integer;
-  our (@float_op, @floatr_op);
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod != 3) {
     my $arg = $self->modrm($mod, $rm, 64);
-    return make_op("f".$float_op[$op], [fp_reg(0),$arg], 87);
+    return { op=>"f".$float_op[$op],  arg=>[fp_reg(0),$arg], proc=>87 }
   }
   elsif ($op != 2 && $op != 3) {
-    return make_op("f".$floatr_op[$op], [fp_reg($rm),fp_reg(0)], 87);
+    return { op=>"f".$floatr_op[$op], arg=>[fp_reg($rm),fp_reg(0)], proc=>87 }
   }
   return $self->bad_op();
 } # esc_dc
@@ -1318,35 +1223,30 @@ sub esc_dd {
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod == 3) {
-    if    ($op == 0) { return make_op("ffree", [fp_reg($rm)], 87) }
-    elsif ($op == 2) { return make_op("fst",   [fp_reg($rm)], 87) }
-    elsif ($op == 3) { return make_op("fstp",  [fp_reg($rm)], 87) }
+    if    ($op == 0) { return { op=>"ffree", arg=>[fp_reg($rm)], proc=>87 } }
+    elsif ($op == 2) { return { op=>"fst",   arg=>[fp_reg($rm)], proc=>87 } }
+    elsif ($op == 3) { return { op=>"fstp",  arg=>[fp_reg($rm)], proc=>87 } }
     elsif ($op == 4) {
-      return make_op("fucom",  [fp_reg(0),fp_reg($rm)], 387);
-    }
+      return { op=>"fucom",  arg=>[fp_reg(0),fp_reg($rm)], proc=>387 } }
     elsif ($op == 5) {
-      return make_op("fucomp", [fp_reg(0),fp_reg($rm)], 387);
-    }
+      return { op=>"fucomp", arg=>[fp_reg(0),fp_reg($rm)], proc=>387 } }
   }
   elsif ($op == 0) {
-    return make_op("fld",  [$self->modrm($mod, $rm, 64)], 87);
-  }
+    return { op=>"fld",  arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   elsif ($op == 2) {
-    return make_op("fst",  [$self->modrm($mod, $rm, 64)], 87);
-  }
+    return { op=>"fst",  arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   elsif ($op == 3) {
-    return make_op("fstp", [$self->modrm($mod, $rm, 64)], 87);
-  }
+    return { op=>"fstp", arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   elsif ($op == 4) {
     my $src = $self->modrm($mod, $rm, 640+7*$self->{data_size});
-    return make_op("frstor", [$src], 87);
+    return { op=>"frstor", arg=>[$src], proc=>87 };
   }
   elsif ($op == 6) {
     my $dest = $self->modrm($mod, $rm, 640+7*$self->{data_size});
-    return make_op("fsave", [$dest], 87);
+    return { op=>"fsave", arg=>[$dest], proc=>87 };
   }
   elsif ($op == 7) {
-    return make_op("fnstsw", [$self->modrm($mod, $rm, 16)], 87);
+    return { op=>"fnstsw", arg=>[$self->modrm($mod, $rm, 16)], proc=>87 };
   }
   return $self->bad_op();
 } # esc_dd
@@ -1355,18 +1255,17 @@ sub esc_de {
   use strict;
   use warnings;
   use integer;
-  our (@float_op, @floatr_op);
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod != 3) {
     my $src = $self->modrm($mod, $rm, 16);
-    return make_op("fi".$float_op[$op], [fp_reg(0), $src], 87);
+    return { op=>"fi".$float_op[$op], arg=>[fp_reg(0),$src], proc=>87 };
   }
   elsif ($op != 2 && $op != 3) {
-    return make_op("f$floatr_op[$op]p", [fp_reg($rm), fp_reg(0)], 87);
+    return { op=>"f$floatr_op[$op]p", arg=>[fp_reg($rm),fp_reg(0)], proc=>87 };
   }
   elsif ($op == 3 && $rm == 1) {
-    return make_op("fcompp", [fp_reg(0), fp_reg(1)], 87);
+    return { op=>"fcompp", arg=>[fp_reg(0),fp_reg(1)], proc=>87 };
   }
   return $self->bad_op();
 } # esc_de
@@ -1379,36 +1278,26 @@ sub esc_df {
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod == 3) {
     if ($op == 4 && $rm == 0) {
-      return make_op("fnstsw",  [$self->get_reg(0,16)], 87);
-    }
+      return { op=>"fnstsw",  arg=>[$self->get_reg(0,16)], proc=>87 } }
     elsif ($op == 5) {
-      return make_op("fucomip", [fp_reg(0),fp_reg($rm)], 87);
-    }
+      return { op=>"fucomip", arg=>[fp_reg(0),fp_reg($rm)], proc=>87 } }
     elsif ($op == 6) {
-      return make_op("fcomip",  [fp_reg(0),fp_reg($rm)], 87);
-    }
+      return { op=>"fcomip",  arg=>[fp_reg(0),fp_reg($rm)], proc=>87 } }
   }
   elsif ($op == 0) {
-    return make_op("fild",  [$self->modrm($mod, $rm, 16)], 87);
-  }
+    return { op=>"fild",  arg=>[$self->modrm($mod, $rm, 16)], proc=>87 } }
   elsif ($op == 2) {
-    return make_op("fist",  [$self->modrm($mod, $rm, 16)], 87);
-  }
+    return { op=>"fist",  arg=>[$self->modrm($mod, $rm, 16)], proc=>87 } }
   elsif ($op == 3) {
-    return make_op("fistp", [$self->modrm($mod, $rm, 16)], 87);
-  }
+    return { op=>"fistp", arg=>[$self->modrm($mod, $rm, 16)], proc=>87 } }
   elsif ($op == 4) {
-    return make_op("fbld",  [$self->modrm($mod, $rm, 80)], 87);
-  }
+    return { op=>"fbld",  arg=>[$self->modrm($mod, $rm, 80)], proc=>87 } }
   elsif ($op == 5) {
-    return make_op("fild",  [$self->modrm($mod, $rm, 64)], 87);
-  }
+    return { op=>"fild",  arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   elsif ($op == 6) {
-    return make_op("fbstp", [$self->modrm($mod, $rm, 80)], 87);
-  }
+    return { op=>"fbstp", arg=>[$self->modrm($mod, $rm, 80)], proc=>87 } }
   elsif ($op == 7) {
-    return make_op("fistp", [$self->modrm($mod, $rm, 64)], 87);
-  }
+    return { op=>"fistp", arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   return $self->bad_op();
 } # esc_df
 
@@ -1419,28 +1308,26 @@ sub opgrp_fe {
   my ($self, $size) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if    ($op == 0) {
-    return make_op("inc", [$self->modrm($mod, $rm, $size)]);
-  }
+    return { op=>"inc", arg=>[$self->modrm($mod, $rm, $size)] } }
   elsif ($op == 1) {
-    return make_op("dec", [$self->modrm($mod, $rm, $size)]);
-  }
+    return { op=>"dec", arg=>[$self->modrm($mod, $rm, $size)] } }
   return $self->bad_op() if $size;
   if    ($op == 2) {
-    return make_op("call", [$self->modrm($mod, $rm)]);
+    return { op=>"call", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 3) {
     my $dest = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
-    return make_op("call", [$dest]);
+    return { op=>"call", arg=>[$dest] };
   }
   elsif ($op == 4) {
-    return make_op("jmp", [$self->modrm($mod, $rm)]);
+    return { op=>"jmp", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 5) {
     my $dest = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
-    return make_op("jmp", [$dest]);
+    return { op=>"jmp", arg=>[$dest] };
   }
   elsif ($op == 6) {
-    return make_op("push", [$self->modrm($mod, $rm)]);
+    return { op=>"push", arg=>[$self->modrm($mod, $rm)] };
   }
   return $self->bad_op();
 } # opgrp_fe
@@ -1480,32 +1367,31 @@ sub xlat_op {
   my $seg = $self->seg_prefix();
   $tbl = { op=>"seg", arg=>[$seg,$tbl], size=>$self->{addr_size} } if $seg;
   $tbl = { op=>"mem", arg=>[$tbl], size=>8 };
-  return make_op("xlat", [$tbl]);
+  return { op=>"xlat", arg=>[$tbl] };
 } # xlat_op
 
 sub twobyte {
   use strict;
   use warnings;
   use integer;
-  our (@cond_code, @prefetch_op, @bittst_grp);
   my ($self) = @_;
   my $byte = $self->next_byte();
   if    ($byte == 0x00) { return $self->twob_00() }
   elsif ($byte == 0x01) { return $self->twob_01() }
-  elsif ($byte == 0x02) { return $self->op_r_rm("lar",    undef, 386) }
-  elsif ($byte == 0x03) { return $self->op_r_rm("lsl",    undef, 386) }
-  elsif ($byte == 0x06) { return make_op("clts",   undef, 386) }
-  elsif ($byte == 0x08) { return make_op("invd",   undef, 486) }
-  elsif ($byte == 0x09) { return make_op("wbinvd", undef, 486) }
-  elsif ($byte == 0x0b) { return make_op("ud2",    undef, 686) }
+  elsif ($byte == 0x02) { return $self->op_r_rm("lar", undef, 386) }
+  elsif ($byte == 0x03) { return $self->op_r_rm("lsl", undef, 386) }
+  elsif ($byte == 0x06) { return { op=>"clts",   proc=>386 } }
+  elsif ($byte == 0x08) { return { op=>"invd",   proc=>486 } }
+  elsif ($byte == 0x09) { return { op=>"wbinvd", proc=>486 } }
+  elsif ($byte == 0x0b) { return { op=>"ud2" } }
   elsif ($byte == 0x0d) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     my $arg = [ $self->modrm($mod, $rm, 0) ];
-    if    ($op == 0) { return make_op("prefetch",  $arg, TDNOW_PROC) }
-    elsif ($op == 1) { return make_op("prefetchw", $arg, TDNOW_PROC) }
+    if    ($op == 0) { return {op=>"prefetch",  arg=>$arg, proc=>$tdnow_proc} }
+    elsif ($op == 1) { return {op=>"prefetchw", arg=>$arg, proc=>$tdnow_proc} }
     return $self->bad_op();
   }
-  elsif ($byte == 0x0e) { return make_op("femms", undef, TDNOW_PROC) }
+  elsif ($byte == 0x0e) { return { op=>"femms", proc=>$tdnow_proc } }
   elsif ($byte == 0x0f) { return $self->tdnow_op() }
   elsif ($byte == 0x10) { return $self->twob_10() }
   elsif ($byte == 0x11) { return $self->twob_11() }
@@ -1519,7 +1405,7 @@ sub twobyte {
     my ($mod, $op, $rm) = $self->split_next_byte();
     return $self->bad_op() if $mod == 3 || $op > 3;
     my $arg = [ $self->modrm($mod, $rm, 0) ];
-    return make_op("prefetch".$prefetch_op[$op], $arg, SSE_PROC);
+    return { op=>"prefetch".$prefetch_op[$op], arg=>$arg, proc=>$sse_proc };
   }
   elsif ($byte == 0x20) { return $self->mov_from_cr("cr") }
   elsif ($byte == 0x21) { return $self->mov_from_cr("dr") }
@@ -1535,15 +1421,14 @@ sub twobyte {
   elsif ($byte == 0x2d) { return $self->twob_2c("") }
   elsif ($byte == 0x2e) { return $self->twob_2e("ucomis") }
   elsif ($byte == 0x2f) { return $self->twob_2e("comis") }
-  elsif ($byte == 0x30) { return make_op("wrmsr",    undef, 586) }
-  elsif ($byte == 0x31) { return make_op("rdtsc",    undef, 586) }
-  elsif ($byte == 0x32) { return make_op("rdmsr",    undef, 586) }
-  elsif ($byte == 0x33) { return make_op("rdpmc",    undef, 686) }
-  elsif ($byte == 0x34) { return make_op("sysenter", undef, 686) }
-  elsif ($byte == 0x35) { return make_op("sysexit",  undef, 686) }
+  elsif ($byte == 0x30) { return { op=>"wrmsr",    proc=>586 } }
+  elsif ($byte == 0x31) { return { op=>"rdtsc",    proc=>586 } }
+  elsif ($byte == 0x32) { return { op=>"rdmsr",    proc=>586 } }
+  elsif ($byte == 0x33) { return { op=>"rdpmc",    proc=>686 } }
+  elsif ($byte == 0x34) { return { op=>"sysenter", proc=>686 } }
+  elsif ($byte == 0x35) { return { op=>"sysexit",  proc=>686 } }
   elsif ($byte >= 0x40 && $byte <= 0x4f) {
-    return $self->op_r_rm("cmov" . $cond_code[$byte & 0xf], undef, 686);
-  }
+    return $self->op_r_rm("cmov".$cond_code[$byte & 0xf], undef, 686) }
   elsif ($byte == 0x50) { return $self->twob_50() }
   elsif ($byte == 0x51) { return $self->sse_op4("sqrt") }
   elsif ($byte == 0x52) { return $self->twob_52("rsqrt") }
@@ -1583,72 +1468,75 @@ sub twobyte {
   elsif ($byte == 0x74) { return $self->mmx_op("pcmpeqb") }
   elsif ($byte == 0x75) { return $self->mmx_op("pcmpeqw") }
   elsif ($byte == 0x76) { return $self->mmx_op("pcmpeqd") }
-  elsif ($byte == 0x77) { return make_op("emms", undef, MMX_PROC) }
+  elsif ($byte == 0x77) { return { op=>"emms", proc=>$mmx_proc } }
   elsif ($byte == 0x7e) { return $self->twob_7e() }
   elsif ($byte == 0x7f) { return $self->twob_7f() }
   elsif ($byte >= 0x80 && $byte <= 0x8f) {
-    return $self->eipoff_op("j" . $cond_code[$byte & 0xf], 386);
-  }
+    return $self->jcond_op($byte, $self->eipoff(), 386) }
   elsif ($byte >= 0x90 && $byte <= 0x9f) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm, 8);
-    return make_op("set".$cond_code[$byte & 0xf], [$dest], 386);
+    return { op=>"set".$cond_code[$byte & 0xf], arg=>[$dest], proc=>386 };
   }
-  elsif ($byte == 0xa0) { return $self->seg_op("push", 4, 386) } # fs
-  elsif ($byte == 0xa1) { return $self->seg_op("pop",  4, 386) } # fs
-  elsif ($byte == 0xa2) { return make_op("cpuid", undef, 486) }
-  elsif ($byte == 0xa3) { return $self->op_rm_r("bt") }
+  elsif ($byte == 0xa0) {
+    return { op=>"push", arg=>[$self->seg_reg(4)], proc=>386 } } # fs
+  elsif ($byte == 0xa1) {
+    return { op=>"pop", arg=>[$self->seg_reg(4)], proc=>386 } } # fs
+  elsif ($byte == 0xa2) { return { op=>"cpuid", proc=>486 } }
+  elsif ($byte == 0xa3) { return $self->op_rm_r("bt", undef, 386) }
   elsif ($byte == 0xa4) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
     my $src  = $self->get_reg($reg);
-    return make_op("shld", [$dest,$src,$self->get_val(8)], 386);
+    return { op=>"shld", arg=>[$dest, $src, $self->get_val(8)], proc=>386 };
   }
   elsif ($byte == 0xa5) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
     my $src  = $self->get_reg($reg);
-    return make_op("shld", [$dest,$src,$self->get_reg(1,8)], 386);
+    return { op=>"shld", arg=>[$dest, $src, $self->get_reg(1,8)], proc=>386 };
   }
-  elsif ($byte == 0xa8) { return $self->seg_op("push", 5, 386) } # gs
-  elsif ($byte == 0xa9) { return $self->seg_op("pop",  5, 386) } # gs
-  elsif ($byte == 0xaa) { return make_op("rsm", undef, 386) }
+  elsif ($byte == 0xa8) {
+    return { op=>"push", arg=>[$self->seg_reg(5)], proc=>386 } } # gs
+  elsif ($byte == 0xa9) {
+    return { op=>"pop", arg=>[$self->seg_reg(5)], proc=>386 } } # gs
+  elsif ($byte == 0xaa) { return { op=>"rsm", proc=>386 } }
   elsif ($byte == 0xab) { return $self->op_rm_r("bts", undef, 386) }
   elsif ($byte == 0xac) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
     my $src  = $self->get_reg($reg);
-    return make_op("shrd", [$dest,$src,$self->get_val(8)], 386);
+    return { op=>"shrd", arg=>[$dest,$src,$self->get_val(8)], proc=>386 };
   }
   elsif ($byte == 0xad) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm);
     my $src  = $self->get_reg($reg);
-    return make_op("shrd", [$dest,$src,$self->get_reg(1,8)], 386);
+    return { op=>"shrd", arg=>[$dest,$src,$self->get_reg(1,8)], proc=>386 };
   }
   elsif ($byte == 0xae) { return $self->twob_ae() }
-  elsif ($byte == 0xaf) { return $self->op_r_rm("imul",    undef, 386) }
-  elsif ($byte == 0xb0) { return $self->op_rm_r("cmpxchg", 8,     486) }
+  elsif ($byte == 0xaf) { return $self->op_r_rm("imul", undef, 386) }
+  elsif ($byte == 0xb0) { return $self->op_rm_r("cmpxchg", 8, 486) }
   elsif ($byte == 0xb1) { return $self->op_rm_r("cmpxchg", undef, 486) }
   elsif ($byte == 0xb2) { return $self->load_far("ss", 386) }
-  elsif ($byte == 0xb3) { return $self->op_rm_r("btr",     undef, 386) }
+  elsif ($byte == 0xb3) { return $self->op_rm_r("btr", undef, 386) }
   elsif ($byte == 0xb4) { return $self->load_far("fs", 386) }
   elsif ($byte == 0xb5) { return $self->load_far("gs", 386) }
   elsif ($byte == 0xb6) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 8);
-    return make_op("movzx", [$self->get_reg($reg), $src], 386);
+    return { op=>"movzx", arg=>[$self->get_reg($reg), $src], proc=>386 };
   }
   elsif ($byte == 0xb7) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 16);
-    return make_op("movzx", [$self->get_reg($reg,32), $src], 386);
+    return { op=>"movzx", arg=>[$self->get_reg($reg,32), $src], proc=>386 };
   }
   elsif ($byte == 0xba) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     return $self->bad_op() unless $op >= 4;
     my $dest = $self->modrm($mod, $rm);
-    return make_op($bittst_grp[$op-4], [$dest,$self->get_val(8)], 386);
+    return {op=>$bittst_grp[$op-4], arg=>[$dest,$self->get_val(8)], proc=>386};
   }
   elsif ($byte == 0xbb) { return $self->op_rm_r("btc", undef, 386) }
   elsif ($byte == 0xbc) { return $self->op_r_rm("bsf", undef, 386) }
@@ -1656,14 +1544,14 @@ sub twobyte {
   elsif ($byte == 0xbe) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 8);
-    return make_op("movsx", [$self->get_reg($reg), $src], 386);
+    return { op=>"movsx", arg=>[$self->get_reg($reg), $src], proc=>386 };
   }
   elsif ($byte == 0xbf) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 16);
-    return make_op("movsx", [$self->get_reg($reg,32), $src], 386);
+    return { op=>"movsx", arg=>[$self->get_reg($reg,32), $src], proc=>386 };
   }
-  elsif ($byte == 0xc0) { return $self->op_rm_r("xadd", 8,     486) }
+  elsif ($byte == 0xc0) { return $self->op_rm_r("xadd", 8, 486) }
   elsif ($byte == 0xc1) { return $self->op_rm_r("xadd", undef, 486) }
   elsif ($byte == 0xc2) { return $self->twob_c2() }
   elsif ($byte == 0xc3) {
@@ -1671,7 +1559,7 @@ sub twobyte {
     return $self->bad_op() if $mod == 3;
     my $mem = $self->modrm($mod, $rm, 32);
     $reg = $self->get_reg($reg, 32);
-    return make_op("movnti", [$mem,$reg], SSE2_PROC);
+    return { op=>"movnti", arg=>[$mem,$reg], proc=>$sse2_proc };
   }
   elsif ($byte == 0xc4) { return $self->twob_c4() }
   elsif ($byte == 0xc5) { return $self->twob_c5() }
@@ -1679,53 +1567,52 @@ sub twobyte {
   elsif ($byte == 0xc7) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     return $self->bad_op() if $op != 1 || $mod == 3;
-    return make_op("cmpxchg8b", [$self->modrm($mod, $rm, 64)], 586);
+    return { op=>"cmpxchg8b", arg=>[$self->modrm($mod, $rm, 64)], proc=>586 };
   }
   elsif ($byte >= 0xc8 && $byte <= 0xcf) {
-    return make_op("bswap", [$self->get_reg($byte&7, 32)], 486);
-  }
+    return { op=>"bswap", arg=>[$self->get_reg($byte&7, 32)], proc=>486 } }
   elsif ($byte == 0xd1) { return $self->mmx_op("psrlw") }
   elsif ($byte == 0xd2) { return $self->mmx_op("psrld") }
   elsif ($byte == 0xd3) { return $self->mmx_op("psrlq") }
-  elsif ($byte == 0xd4) { return $self->mmx_op("paddq", SSE2_PROC) }
+  elsif ($byte == 0xd4) { return $self->mmx_op("paddq", $sse2_proc) }
   elsif ($byte == 0xd5) { return $self->mmx_op("pmullw") }
   elsif ($byte == 0xd6) { return $self->twob_d6() }
   elsif ($byte == 0xd7) { return $self->twob_d7() }
   elsif ($byte == 0xd8) { return $self->mmx_op("psubusb") }
   elsif ($byte == 0xd9) { return $self->mmx_op("psubusw") }
-  elsif ($byte == 0xda) { return $self->mmx_op("pminub", SSE_PROC) }
+  elsif ($byte == 0xda) { return $self->mmx_op("pminub", $sse_proc) }
   elsif ($byte == 0xdb) { return $self->mmx_op("pand") }
   elsif ($byte == 0xdc) { return $self->mmx_op("paddusb") }
   elsif ($byte == 0xdd) { return $self->mmx_op("paddusw") }
-  elsif ($byte == 0xde) { return $self->mmx_op("pmaxub", SSE_PROC) }
+  elsif ($byte == 0xde) { return $self->mmx_op("pmaxub", $sse_proc) }
   elsif ($byte == 0xdf) { return $self->mmx_op("pandn") }
-  elsif ($byte == 0xe0) { return $self->mmx_op("pavgb", SSE_PROC) }
+  elsif ($byte == 0xe0) { return $self->mmx_op("pavgb", $sse_proc) }
   elsif ($byte == 0xe1) { return $self->mmx_op("psraw") }
   elsif ($byte == 0xe2) { return $self->mmx_op("psrad") }
-  elsif ($byte == 0xe3) { return $self->mmx_op("pavgw", SSE_PROC) }
-  elsif ($byte == 0xe4) { return $self->mmx_op("pmulhuw", SSE_PROC) }
+  elsif ($byte == 0xe3) { return $self->mmx_op("pavgw", $sse_proc) }
+  elsif ($byte == 0xe4) { return $self->mmx_op("pmulhuw", $sse_proc) }
   elsif ($byte == 0xe5) { return $self->mmx_op("pmulhw") }
   elsif ($byte == 0xe6) { return $self->twob_e6() }
   elsif ($byte == 0xe7) { return $self->twob_e7() }
   elsif ($byte == 0xe8) { return $self->mmx_op("psubsb") }
   elsif ($byte == 0xe9) { return $self->mmx_op("psubsw") }
-  elsif ($byte == 0xea) { return $self->mmx_op("pminsw", SSE_PROC) }
+  elsif ($byte == 0xea) { return $self->mmx_op("pminsw", $sse_proc) }
   elsif ($byte == 0xeb) { return $self->mmx_op("por") }
   elsif ($byte == 0xec) { return $self->mmx_op("paddsb") }
   elsif ($byte == 0xed) { return $self->mmx_op("paddsw") }
-  elsif ($byte == 0xee) { return $self->mmx_op("pmaxsw", SSE_PROC) }
+  elsif ($byte == 0xee) { return $self->mmx_op("pmaxsw", $sse_proc) }
   elsif ($byte == 0xef) { return $self->mmx_op("pxor") }
   elsif ($byte == 0xf1) { return $self->mmx_op("psllw") }
   elsif ($byte == 0xf2) { return $self->mmx_op("pslld") }
   elsif ($byte == 0xf3) { return $self->mmx_op("psllq") }
-  elsif ($byte == 0xf4) { return $self->mmx_op("pmuludq", SSE2_PROC) }
+  elsif ($byte == 0xf4) { return $self->mmx_op("pmuludq", $sse2_proc) }
   elsif ($byte == 0xf5) { return $self->mmx_op("pmaddwd") }
-  elsif ($byte == 0xf6) { return $self->mmx_op("psadbw", SSE_PROC) }
+  elsif ($byte == 0xf6) { return $self->mmx_op("psadbw", $sse_proc) }
   elsif ($byte == 0xf7) { return $self->twob_f7() }
   elsif ($byte == 0xf8) { return $self->mmx_op("psubb") }
   elsif ($byte == 0xf9) { return $self->mmx_op("psubw") }
   elsif ($byte == 0xfa) { return $self->mmx_op("psubd") }
-  elsif ($byte == 0xfb) { return $self->mmx_op("psubq", SSE2_PROC) }
+  elsif ($byte == 0xfb) { return $self->mmx_op("psubq", $sse2_proc) }
   elsif ($byte == 0xfc) { return $self->mmx_op("paddb") }
   elsif ($byte == 0xfd) { return $self->mmx_op("paddw") }
   elsif ($byte == 0xfe) { return $self->mmx_op("paddd") }
@@ -1739,14 +1626,13 @@ sub twob_00 {
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if    ($op == 0) {
-    return make_op("sldt", [$self->modrm($mod, $rm)], 386);
-  }
+    return { op=>"sldt", arg=>[$self->modrm($mod, $rm)], proc=>386 } }
   my $arg = [ $self->modrm($mod, $rm, 16) ];
-  if    ($op == 1) { return make_op("str",  $arg, 386) }
-  elsif ($op == 2) { return make_op("lldt", $arg, 386) }
-  elsif ($op == 3) { return make_op("ltr",  $arg, 386) }
-  elsif ($op == 4) { return make_op("verr", $arg, 386) }
-  elsif ($op == 5) { return make_op("verw", $arg, 386) }
+  if    ($op == 1) { return { op=>"str",  arg=>$arg, proc=>386 } }
+  elsif ($op == 2) { return { op=>"lldt", arg=>$arg, proc=>386 } }
+  elsif ($op == 3) { return { op=>"ltr",  arg=>$arg, proc=>386 } }
+  elsif ($op == 4) { return { op=>"verr", arg=>$arg, proc=>386 } }
+  elsif ($op == 5) { return { op=>"verw", arg=>$arg, proc=>386 } }
   return $self->bad_op();
 } # twob_00
 
@@ -1757,27 +1643,21 @@ sub twob_01 {
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($op == 0) {
-    return make_op("sgdt", [$self->modrm($mod, $rm, 48)], 286);
-  }
+    return { op=>"sgdt", arg=>[$self->modrm($mod, $rm, 48)], proc=>286 } }
   elsif ($op == 1) {
-    return make_op("sidt", [$self->modrm($mod, $rm, 48)], 286);
-  }
+    return { op=>"sidt", arg=>[$self->modrm($mod, $rm, 48)], proc=>286 } }
   elsif ($op == 2) {
-    return make_op("lgdt", [$self->modrm($mod, $rm, 48)], 386);
-  }
+    return { op=>"lgdt", arg=>[$self->modrm($mod, $rm, 48)], proc=>386 } }
   elsif ($op == 3) {
-    return make_op("lidt", [$self->modrm($mod, $rm, 48)], 386);
-  }
+    return { op=>"lidt", arg=>[$self->modrm($mod, $rm, 48)], proc=>386 } }
   elsif ($op == 4) {
     my $dest = $self->modrm($mod, $rm, ($mod == 3) ? undef : 16);
-    return make_op("smsw", [$dest], 286);
+    return { op=>"smsw", arg=>[$dest], proc=>286 };
   }
   elsif ($op == 6) {
-    return make_op("lmsw", [$self->modrm($mod, $rm, 16)], 286);
-  }
+    return { op=>"lmsw", arg=>[$self->modrm($mod, $rm, 16)], proc=>286 } }
   elsif ($op == 7) {
-    return make_op("invlpg", [$self->modrm($mod, $rm, 0)], 486);
-  }
+    return { op=>"invlpg", arg=>[$self->modrm($mod, $rm, 0)], proc=>486 } }
   return $self->bad_op();
 } # twob_01
 
@@ -1787,10 +1667,10 @@ sub twob_10 {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm("movups", 128, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->op_xmm_rm("movupd", 128, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->op_xmm_rm("movsd",  64,  SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("movss",  32,  SSE_PROC)  }
+  if    ($pre == 0) { return $self->op_xmm_rm("movups", 128, $sse_proc)  }
+  elsif ($pre == 1) { return $self->op_xmm_rm("movupd", 128, $sse2_proc) }
+  elsif ($pre == 2) { return $self->op_xmm_rm("movsd",  64,  $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("movss",  32,  $sse_proc)  }
   return $self->bad_op();
 } # twob_10
 
@@ -1800,10 +1680,10 @@ sub twob_11 {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_rm_xmm("movups", 128, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->op_rm_xmm("movupd", 128, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->op_rm_xmm("movsd",  64,  SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_rm_xmm("movss",  32,  SSE_PROC)  }
+  if    ($pre == 0) { return $self->op_rm_xmm("movups", 128, $sse_proc)  }
+  elsif ($pre == 1) { return $self->op_rm_xmm("movupd", 128, $sse2_proc) }
+  elsif ($pre == 2) { return $self->op_rm_xmm("movsd",  64,  $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_rm_xmm("movss",  32,  $sse_proc)  }
   return $self->bad_op();
 } # twob_11
 
@@ -1826,7 +1706,7 @@ sub twob_12 {
     else { return $self->bad_op() }
     $arg = $self->modrm($mod, $rm, 64);
   }
-  return make_op($op, [xmm_reg($xmm), $arg], SSE_PROC);
+  return { op=>$op, arg=>[xmm_reg($xmm), $arg], proc=>$sse_proc };
 } # twob_12
 
 sub twob_13 {
@@ -1836,14 +1716,14 @@ sub twob_13 {
   my ($self, $lh) = @_;
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   return $self->bad_op() if $mod == 3;
-  $self->{proc} = SSE_PROC;
+  $self->{proc} = $sse_proc;
   my $op;
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 0) { $op = "mov${lh}ps" }
   elsif ($mmx_pre == 1) { $op = "mov${lh}pd" }
   else { return $self->bad_op() }
   my $arg = $self->modrm($mod, $rm, 64);
-  return make_op($op, [$arg, xmm_reg($xmm)], SSE_PROC);
+  return { op=>$op, arg=>[$arg, xmm_reg($xmm)], proc=>$sse_proc };
 } # twob_13
 
 sub twob_29 {
@@ -1852,8 +1732,8 @@ sub twob_29 {
   use integer;
   my ($self, $op) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_rm_xmm("movaps", 128, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->op_rm_xmm("movapd", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_rm_xmm("movaps", 128, $sse_proc)  }
+  elsif ($pre == 1) { return $self->op_rm_xmm("movapd", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_29
 
@@ -1863,10 +1743,10 @@ sub twob_2a {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm("cvtpi2ps", 64, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->op_xmm_rm("cvtpi2pd", 64, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->op_xmm_rm("cvtsi2sd", 32, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("cvtsi2ss", 32, SSE_PROC)  }
+  if    ($pre == 0) { return $self->op_xmm_rm("cvtpi2ps", 64, $sse_proc)  }
+  elsif ($pre == 1) { return $self->op_xmm_rm("cvtpi2pd", 64, $sse2_proc) }
+  elsif ($pre == 2) { return $self->op_xmm_rm("cvtsi2sd", 32, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("cvtsi2ss", 32, $sse_proc)  }
   return $self->bad_op();
 } # twob_2a
 
@@ -1879,8 +1759,8 @@ sub twob_2b {
   return $self->bad_op() if $mod == 3;
   my $arg  = [$self->modrm($mod, $rm, 128), xmm_reg($xmm)];
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return make_op("movntps", $arg, SSE_PROC)  }
-  elsif ($pre == 1) { return make_op("movntpd", $arg, SSE2_PROC) }
+  if    ($pre == 0) { return { op=>"movntps", arg=>$arg, proc=>$sse_proc}  }
+  elsif ($pre == 1) { return { op=>"movntpd", arg=>$arg, proc=>$sse2_proc} }
   return $self->bad_op();
 } # twob_2b
 
@@ -1893,21 +1773,21 @@ sub twob_2c {
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 0) {
     my $src = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, 64);
-    return make_op("cvt${t}ps2pi", [mmx_reg($reg), $src], SSE_PROC);
+    return { op=>"cvt${t}ps2pi", arg=>[mmx_reg($reg),$src], proc=>$sse_proc };
   }
   elsif ($mmx_pre == 1) {
     my $src = $self->modrm($mod, $rm, 128);
-    return make_op("cvt${t}pd2pi", [mmx_reg($reg), $src], SSE2_PROC);
+    return { op=>"cvt${t}pd2pi", arg=>[mmx_reg($reg),$src], proc=>$sse2_proc };
   }
   elsif ($mmx_pre == 2) {
     $reg = $self->get_reg($reg, 32);
     my $src = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, 64);
-    return make_op("cvt${t}sd2si", [$reg, $src], SSE2_PROC);
+    return { op=>"cvt${t}sd2si", arg=>[$reg,$src], proc=>$sse2_proc };
   }
   elsif ($mmx_pre == 3) {
     $reg = $self->get_reg($reg, 32);
     my $src = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, 32);
-    return make_op("cvt${t}ss2si", [$reg, $src], SSE_PROC);
+    return { op=>"cvt${t}ss2si", arg=>[$reg,$src], proc=>$sse_proc };
   }
   return $self->bad_op();
 } # twob_2c
@@ -1918,8 +1798,8 @@ sub twob_2e {
   use integer;
   my ($self, $op) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm($op."s", 32, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->op_xmm_rm($op."d", 64, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_xmm_rm($op."s", 32, $sse_proc)  }
+  elsif ($pre == 1) { return $self->op_xmm_rm($op."d", 64, $sse2_proc) }
   return $self->bad_op();
 } # twob_2e
 
@@ -1932,8 +1812,8 @@ sub twob_50 {
   return $self->bad_op() unless $mod == 3;
   my $arg = [ $self->get_reg($reg,32), xmm_reg($xmm) ];
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return make_op("movmskps", $arg, SSE_PROC) }
-  elsif ($pre == 1) { return make_op("movmskpd", $arg, SSE2_PROC) }
+  if    ($pre == 0) { return { op=>"movmskps", arg=>$arg, proc=>$sse_proc  } }
+  elsif ($pre == 1) { return { op=>"movmskpd", arg=>$arg, proc=>$sse2_proc } }
   return $self->bad_op();
 } # twob_50
 
@@ -1943,8 +1823,8 @@ sub twob_52 {
   use integer;
   my ($self, $op) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm($op."ps", 128, SSE_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm($op."ss", 32,  SSE_PROC) }
+  if    ($pre == 0) { return $self->op_xmm_rm($op."ps", 128, $sse_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm($op."ss", 32,  $sse_proc) }
   return $self->bad_op();
 } # twob_52
 
@@ -1954,10 +1834,10 @@ sub twob_5a {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm("cvtps2pd",  64, SSE2_PROC) }
-  elsif ($pre == 1) { return $self->op_xmm_rm("cvtpd2ps", 128, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->op_xmm_rm("cvtsd2ss",  64, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("cvtss2sd",  32, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_xmm_rm("cvtps2pd",  64, $sse2_proc) }
+  elsif ($pre == 1) { return $self->op_xmm_rm("cvtpd2ps", 128, $sse2_proc) }
+  elsif ($pre == 2) { return $self->op_xmm_rm("cvtsd2ss",  64, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("cvtss2sd",  32, $sse2_proc) }
   return $self->bad_op();
 } # twob_5a
 
@@ -1967,9 +1847,9 @@ sub twob_5b {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_xmm_rm("cvtdq2ps",  128, SSE2_PROC) }
-  elsif ($pre == 1) { return $self->op_xmm_rm("cvtps2dq",  128, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("cvttps2dq", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_xmm_rm("cvtdq2ps",  128, $sse2_proc) }
+  elsif ($pre == 1) { return $self->op_xmm_rm("cvtps2dq",  128, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("cvttps2dq", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_5b
 
@@ -1979,7 +1859,7 @@ sub twob_6c {
   use integer;
   my ($self, $op) = @_;
   return $self->bad_op() unless $self->mmx_prefix() == 1;
-  return $self->op_xmm_rm($op, 128, SSE2_PROC);
+  return $self->op_xmm_rm($op, 128, $sse2_proc);
 } # twob_6c
 
 sub twob_6e {
@@ -1988,8 +1868,8 @@ sub twob_6e {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_mm_rm ("movd", 32, MMX_PROC)  }
-  elsif ($pre == 1) { return $self->op_xmm_rm("movd", 32, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_mm_rm ("movd", 32, $mmx_proc)  }
+  elsif ($pre == 1) { return $self->op_xmm_rm("movd", 32, $sse2_proc) }
   return $self->bad_op();
 } # twob_6e
 
@@ -1999,9 +1879,9 @@ sub twob_6f {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_mm_rm ("movq",    64, MMX_PROC)  }
-  elsif ($pre == 1) { return $self->op_xmm_rm("movdqa", 128, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("movdqu", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_mm_rm ("movq",    64, $mmx_proc)  }
+  elsif ($pre == 1) { return $self->op_xmm_rm("movdqa", 128, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("movdqu", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_6f
 
@@ -2011,10 +1891,10 @@ sub twob_70 {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->opi_mm_rm("pshufw",    64, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->opi_xmm_rm("pshufd",  128, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->opi_xmm_rm("pshuflw", 128, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->opi_xmm_rm("pshufhw", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->opi_mm_rm("pshufw",    64, $sse_proc)  }
+  elsif ($pre == 1) { return $self->opi_xmm_rm("pshufd",  128, $sse2_proc) }
+  elsif ($pre == 2) { return $self->opi_xmm_rm("pshuflw", 128, $sse2_proc) }
+  elsif ($pre == 3) { return $self->opi_xmm_rm("pshufhw", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_70
 
@@ -2041,11 +1921,9 @@ sub twob_73 {
   if    ($op == 2) { return $self->mmx_shift_imm("psrlq", $rm) }
   elsif ($op == 6) { return $self->mmx_shift_imm("psllq", $rm) }
   elsif ($op == 3 && $self->{mmx_pre}) {
-    return $self->mmx_shift_imm("psrldq", $rm);
-  }
+    return $self->mmx_shift_imm("psrldq", $rm) }
   elsif ($op == 7 && $self->{mmx_pre}) {
-    return $self->mmx_shift_imm("pslldq", $rm);
-  }
+    return $self->mmx_shift_imm("pslldq", $rm) }
   return $self->bad_op();
 } # twob_73
 
@@ -2055,9 +1933,9 @@ sub twob_7e {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_rm_mm ("movd", 32, MMX_PROC)  }
-  elsif ($pre == 1) { return $self->op_rm_xmm("movd", 32, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("movq", 64, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_rm_mm ("movd", 32, $mmx_proc)  }
+  elsif ($pre == 1) { return $self->op_rm_xmm("movd", 32, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("movq", 64, $sse2_proc) }
   return $self->bad_op();
 } # twob_7e
 
@@ -2067,9 +1945,9 @@ sub twob_7f {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->op_rm_mm ("movq",    64, MMX_PROC)  }
-  elsif ($pre == 1) { return $self->op_rm_xmm("movdqa", 128, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_rm_xmm("movdqu", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->op_rm_mm ("movq",    64, $mmx_proc)  }
+  elsif ($pre == 1) { return $self->op_rm_xmm("movdqa", 128, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_rm_xmm("movdqu", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_7f
 
@@ -2080,25 +1958,20 @@ sub twob_ae {
   my ($self) = @_;
   my ($mod, $op, $rm) = $self->split_next_byte();
   if ($mod == 3) {
-    if    ($op == 5) { return make_op("lfence", undef, SSE2_PROC) }
-    elsif ($op == 6) { return make_op("mfence", undef, SSE2_PROC) }
-    elsif ($op == 7) { return make_op("sfence", undef, SSE_PROC) }
+    if    ($op == 5) { return { op=>"lfence", proc=>$sse2_proc } }
+    elsif ($op == 6) { return { op=>"mfence", proc=>$sse2_proc } }
+    elsif ($op == 7) { return { op=>"sfence", proc=>$sse_proc  } }
   }
   elsif ($op == 0) {
-    return make_op("fxsave", [$self->modrm($mod,$rm,4096)], 686);
-  }
+    return {op=>"fxsave", arg=>[$self->modrm($mod,$rm,4096)], proc=>686} }
   elsif ($op == 1) {
-    return make_op("fxrstor", [$self->modrm($mod,$rm,4096)], 686);
-  }
+    return {op=>"fxrstor", arg=>[$self->modrm($mod,$rm,4096)], proc=>686} }
   elsif ($op == 2) {
-    return make_op("ldmxcsr", [$self->modrm($mod,$rm,32)], SSE_PROC);
-  }
+    return {op=>"ldmxcsr", arg=>[$self->modrm($mod,$rm,32)], proc=>$sse_proc} }
   elsif ($op == 3) {
-    return make_op("stmxcsr", [$self->modrm($mod,$rm,32)], SSE_PROC);
-  }
+    return {op=>"stmxcsr", arg=>[$self->modrm($mod,$rm,32)], proc=>$sse_proc} }
   elsif ($op == 7) {
-    return make_op("clflush", [$self->modrm($mod,$rm,0)], SSE2_PROC);
-  }
+    return {op=>"clflush", arg=>[$self->modrm($mod,$rm,0)], proc=>$sse2_proc} }
   return $self->bad_op();
 } # twob_ae
 
@@ -2106,27 +1979,26 @@ sub twob_c2 {
   use strict;
   use warnings;
   use integer;
-  our @sse_cmp;
   my ($self) = @_;
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   $xmm = xmm_reg($xmm);
 
   my ($type, $size, $proc);
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { $type="ps"; $size=128; $proc=SSE_PROC;  }
-  elsif ($pre == 1) { $type="pd"; $size=128; $proc=SSE2_PROC; }
-  elsif ($pre == 2) { $type="sd"; $size=64;  $proc=SSE2_PROC; }
-  elsif ($pre == 3) { $type="ss"; $size=32;  $proc=SSE_PROC;  }
+  if    ($pre == 0) { $type="ps"; $size=128; $proc=$sse_proc;  }
+  elsif ($pre == 1) { $type="pd"; $size=128; $proc=$sse2_proc; }
+  elsif ($pre == 2) { $type="sd"; $size=64;  $proc=$sse2_proc; }
+  elsif ($pre == 3) { $type="ss"; $size=32;  $proc=$sse_proc;  }
   else { return $self->bad_op() }
   my $src = ($mod == 3) ? xmm($rm) : $self->modrm($mod, $rm, $size);
 
   my $imm = $self->next_byte();
   if ($imm <= 7) {
-    return make_op("cmp$sse_cmp[$imm]$type", [$xmm, $src], $proc);
+    return { op=>"cmp$sse_comp[$imm]$type", arg=>[$xmm,$src], proc=>$proc };
   }
   else {
     $imm = { op=>"lit", arg=>[$imm], size=>8 };
-    return make_op("cmp$type", [$xmm, $src, $imm], $proc);
+    return { op=>"cmp$type", arg=>[$xmm,$src,$imm], proc=>$proc };
   }
 } # twob_c2
 
@@ -2141,11 +2013,10 @@ sub twob_c4 {
   my $imm = $self->get_val(8);
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 0) {
-    return make_op("pinsrw", [mmx_reg($mm), $src, $imm], SSE_PROC);
-  }
+    return { op=>"pinsrw", arg=>[mmx_reg($mm),$src,$imm], proc=>$sse_proc } }
   elsif ($mmx_pre == 1) {
-    return make_op("pinsrw", [xmm_reg($mm), $src, $imm], SSE2_PROC);
-  }
+    return { op=>"pinsrw", arg=>[xmm_reg($mm),$src,$imm], proc=>$sse2_proc } }
+  return $self->bad_op();
 } # twob_c4
 
 sub twob_c5 {
@@ -2159,11 +2030,9 @@ sub twob_c5 {
   my $imm = $self->get_val(8);
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 0) {
-    return make_op("pextrw", [$reg, mmx_reg($mm), $imm], SSE_PROC);
-  }
+    return { op=>"pextrw", arg=>[$reg,mmx_reg($mm),$imm], proc=>$sse_proc } }
   elsif ($mmx_pre == 1) {
-    return make_op("pextrw", [$reg, xmm_reg($mm), $imm], SSE2_PROC);
-  }
+    return { op=>"pextrw", arg=>[$reg,xmm_reg($mm),$imm], proc=>$sse2_proc } }
   return $self->bad_op();
 } # twob_c5
 
@@ -2173,8 +2042,8 @@ sub twob_c6 {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return $self->opi_xmm_rm("shufps", 128, SSE_PROC)  }
-  elsif ($pre == 1) { return $self->opi_xmm_rm("shufpd", 128, SSE2_PROC) }
+  if    ($pre == 0) { return $self->opi_xmm_rm("shufps", 128, $sse_proc)  }
+  elsif ($pre == 1) { return $self->opi_xmm_rm("shufpd", 128, $sse2_proc) }
   return $self->bad_op();
 } # twob_c6
 
@@ -2187,15 +2056,15 @@ sub twob_d6 {
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 1) {
     my $dest = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, 64);
-    return make_op("movq", [$dest, xmm_reg($mm)], SSE2_PROC);
+    return {op=>"movq", arg=>[$dest, xmm_reg($mm)], proc=>$sse2_proc};
   }
   elsif ($mmx_pre == 2) {
     return $self->bad_op() unless $mod == 3;
-    return make_op("movdq2q", [mmx_reg($rm), xmm_reg($mm)], SSE2_PROC);
+    return {op=>"movdq2q", arg=>[mmx_reg($rm),xmm_reg($mm)], proc=>$sse2_proc};
   }
   elsif ($mmx_pre == 3) {
     return $self->bad_op() unless $mod == 3;
-    return make_op("movq2dq", [xmm_reg($rm), mmx_reg($mm)], SSE2_PROC);
+    return {op=>"movq2dq", arg=>[xmm_reg($rm),mmx_reg($mm)], proc=>$sse2_proc};
   }
   return $self->bad_op();
 } # twob_d6
@@ -2210,11 +2079,9 @@ sub twob_d7 {
   $reg = $self->get_reg($reg, 32);
   my $mmx_pre = $self->mmx_prefix();
   if    ($mmx_pre == 0) {
-    return make_op("pmovmskb", [$reg, mmx_reg($mm)], SSE_PROC);
-  }
+    return { op=>"pmovmskb", arg=>[$reg, mmx_reg($mm)], proc=>$sse_proc } }
   elsif ($mmx_pre == 1) {
-    return make_op("pmovmskb", [$reg, xmm_reg($mm)], SSE2_PROC);
-  }
+    return { op=>"pmovmskb", arg=>[$reg, xmm_reg($mm)], proc=>$sse2_proc } }
   else { return $self->bad_op() }
 } # twob_d7
 
@@ -2224,9 +2091,9 @@ sub twob_e6 {
   use integer;
   my ($self) = @_;
   my $pre = $self->mmx_prefix();
-  if    ($pre == 1) { return $self->op_xmm_rm("cvttpd2dq", 128, SSE2_PROC) }
-  elsif ($pre == 2) { return $self->op_xmm_rm("cvtpd2dq",  128, SSE2_PROC) }
-  elsif ($pre == 3) { return $self->op_xmm_rm("cvtdq2pd",   64, SSE2_PROC) }
+  if    ($pre == 1) { return $self->op_xmm_rm("cvttpd2dq", 128, $sse2_proc) }
+  elsif ($pre == 2) { return $self->op_xmm_rm("cvtpd2dq",  128, $sse2_proc) }
+  elsif ($pre == 3) { return $self->op_xmm_rm("cvtdq2pd",   64, $sse2_proc) }
   return $self->bad_op();
 } # twob_e6
 
@@ -2240,11 +2107,11 @@ sub twob_e7 {
   my $mmx_pre = $self->mmx_prefix();
   if ($mmx_pre == 0) {
     my $dest = $self->modrm($mod, $rm, 64);
-    return make_op("movntq", [$dest,mmx_reg($reg)], SSE_PROC);
+    return { op=>"movntq", arg=>[$dest,mmx_reg($reg)], proc=>$sse_proc };
   }
   elsif ($mmx_pre == 1) {
     my $dest = $self->modrm($mod, $rm, 128);
-    return make_op("movntdq", [$dest,xmm_reg($reg)], SSE2_PROC);
+    return { op=>"movntdq", arg=>[$dest,xmm_reg($reg)], proc=>$sse2_proc };
   }
   return $self->bad_op();
 } # twob_e7
@@ -2258,10 +2125,12 @@ sub twob_f7 {
   return $self->bad_op() unless $mod == 3;
   my $mmx_pre = $self->mmx_prefix();
   if ($mmx_pre == 0) {
-    return make_op("maskmovq", [mmx_reg($reg),mmx_reg($rm)], SSE_PROC);
+    return { op=>"maskmovq", arg=>[mmx_reg($reg), mmx_reg($rm)],
+        proc=>$sse_proc };
   }
   elsif ($mmx_pre == 1) {
-    return make_op("maskmovdqu" , [xmm_reg($reg),xmm_reg($rm)], SSE2_PROC);
+    return { op=>"maskmovdqu", arg=>[xmm_reg($reg), xmm_reg($rm)],
+        proc=>$sse2_proc };
   }
   return $self->bad_op();
 } # twob_f7
@@ -2272,32 +2141,32 @@ sub tdnow_op {
   use integer;
   my ($self) = @_;
   my ($mod, $reg, $rm) = $self->split_next_byte();
-  my $arg = [ mmx_reg($reg), $self->modrm($mod, $rm, 64) ];
+  my $a = [ mmx_reg($reg), $self->modrm($mod, $rm, 64) ];
   my $byte = $self->next_byte();
-  if    ($byte == 0x0c) { return make_op("pi2fw",    $arg, TDNOW2_PROC) }
-  elsif ($byte == 0x0d) { return make_op("pi2fd",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x1c) { return make_op("pf2iw",    $arg, TDNOW2_PROC) }
-  elsif ($byte == 0x1d) { return make_op("pf2id",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x8a) { return make_op("pfnacc",   $arg, TDNOW2_PROC) }
-  elsif ($byte == 0x8e) { return make_op("pfpnacc",  $arg, TDNOW2_PROC) }
-  elsif ($byte == 0x90) { return make_op("pfcmpge",  $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x94) { return make_op("pfmin",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x96) { return make_op("pfrcp",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x97) { return make_op("pfrsqrt",  $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x9a) { return make_op("pfsub",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0x9e) { return make_op("pfadd",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xa0) { return make_op("pfcmpgt",  $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xa4) { return make_op("pfmax",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xa6) { return make_op("pfrcpit1", $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xa7) { return make_op("pfrsqit1", $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xaa) { return make_op("pfsubr",   $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xae) { return make_op("pfacc",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xb0) { return make_op("pfcmpeq",  $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xb4) { return make_op("pfmul",    $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xb6) { return make_op("pfrcpit2", $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xb7) { return make_op("pmulhrw",  $arg, TDNOW_PROC)  }
-  elsif ($byte == 0xbb) { return make_op("pswapd",   $arg, TDNOW2_PROC) }
-  elsif ($byte == 0xbf) { return make_op("pavgusb",  $arg, TDNOW_PROC)  }
+  if    ($byte == 0x0c) { return {op=>"pi2fw",    arg=>$a,proc=>$tdnow2_proc} }
+  elsif ($byte == 0x0d) { return {op=>"pi2fd",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x1c) { return {op=>"pf2iw",    arg=>$a,proc=>$tdnow2_proc} }
+  elsif ($byte == 0x1d) { return {op=>"pf2id",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x8a) { return {op=>"pfnacc",   arg=>$a,proc=>$tdnow2_proc} }
+  elsif ($byte == 0x8e) { return {op=>"pfpnacc",  arg=>$a,proc=>$tdnow2_proc} }
+  elsif ($byte == 0x90) { return {op=>"pfcmpge",  arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x94) { return {op=>"pfmin",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x96) { return {op=>"pfrcp",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x97) { return {op=>"pfrsqrt",  arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x9a) { return {op=>"pfsub",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0x9e) { return {op=>"pfadd",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xa0) { return {op=>"pfcmpgt",  arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xa4) { return {op=>"pfmax",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xa6) { return {op=>"pfrcpit1", arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xa7) { return {op=>"pfrsqit1", arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xaa) { return {op=>"pfsubr",   arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xae) { return {op=>"pfacc",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xb0) { return {op=>"pfcmpeq",  arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xb4) { return {op=>"pfmul",    arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xb6) { return {op=>"pfrcpit2", arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xb7) { return {op=>"pmulhrw",  arg=>$a,proc=>$tdnow_proc}  }
+  elsif ($byte == 0xbb) { return {op=>"pswapd",   arg=>$a,proc=>$tdnow2_proc} }
+  elsif ($byte == 0xbf) { return {op=>"pavgusb",  arg=>$a,proc=>$tdnow_proc}  }
   return $self->bad_op();
 } # tdnow_op
 
@@ -2309,7 +2178,7 @@ sub mov_from_cr {
   my ($mod, $num, $rm) = $self->split_next_byte();
   return $self->bad_op() unless $mod == 3;
   my $reg = { op=>"reg", arg=>[$type.$num, $type], size=>32 };
-  return make_op("mov", [$self->get_reg($rm, 32), $reg], 386);
+  return { op=>"mov", arg=>[$self->get_reg($rm, 32), $reg], proc=>386 };
 } # mov_from_cr
 
 sub mov_to_cr {
@@ -2320,7 +2189,7 @@ sub mov_to_cr {
   my ($mod, $num, $rm) = $self->split_next_byte;
   return $self->bad_op() unless $mod == 3;
   my $reg = { op=>"reg", arg=>[$type.$num, $type], size=>32 };
-  return make_op("mov", [$reg, $self->get_reg($rm, 32)], 386);
+  return { op=>"mov", arg=>[$reg, $self->get_reg($rm, 32)], proc=>386 };
 } # mov_to_cr
 
 sub op_mm_rm {
@@ -2330,7 +2199,7 @@ sub op_mm_rm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $mm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? mmx_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [mmx_reg($mm), $arg], $proc);
+  return { op=>$op, arg=>[mmx_reg($mm), $arg], proc=>$proc };
 } # op_mm_rm
 
 sub opi_mm_rm {
@@ -2340,7 +2209,7 @@ sub opi_mm_rm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $mm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? mmx_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [mmx_reg($mm), $arg, $self->get_val(8)], $proc);
+  return { op=>$op, arg=>[mmx_reg($mm),$arg,$self->get_val(8)], proc=>$proc };
 } # opi_mm_rm
 
 sub op_rm_mm {
@@ -2350,7 +2219,7 @@ sub op_rm_mm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $mm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? mmx_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [$arg, mmx_reg($mm)], $proc);
+  return { op=>$op, arg=>[$arg, mmx_reg($mm)], proc=>$proc };
 } # op_rm_mm
 
 sub op_xmm_rm {
@@ -2360,7 +2229,7 @@ sub op_xmm_rm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [xmm_reg($xmm), $arg], $proc);
+  return { op=>$op, arg=>[xmm_reg($xmm), $arg], proc=>$proc };
 } # op_xmm_rm
 
 sub opi_xmm_rm {
@@ -2370,7 +2239,7 @@ sub opi_xmm_rm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [xmm_reg($xmm), $arg, $self->get_val(8)], $proc);
+  return {op=>$op, arg=>[xmm_reg($xmm),$arg,$self->get_val(8)], proc=>$proc};
 } # opi_xmm_rm
 
 sub op_rm_xmm {
@@ -2380,7 +2249,7 @@ sub op_rm_xmm {
   my ($self, $op, $size, $proc) = @_;
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   my $arg = ($mod == 3) ? xmm_reg($rm) : $self->modrm($mod, $rm, $size);
-  return make_op($op, [$arg, xmm_reg($xmm)], $proc);
+  return { op=>$op, arg=>[$arg, xmm_reg($xmm)], proc=>$proc };
 } # op_rm_xmm
 
 sub mmx_op {
@@ -2392,11 +2261,11 @@ sub mmx_op {
   my $mmx_pre = $self->mmx_prefix();
   if ($mmx_pre == 0) {
     my $src = $self->modrm($mod, $rm, 64);
-    return make_op($op, [mmx_reg($reg), $src], $proc || MMX_PROC);
+    return { op=>$op, arg=>[mmx_reg($reg), $src], proc=>($proc||$mmx_proc) };
   }
   elsif ($mmx_pre == 1) {
     my $src = $self->modrm($mod, $rm, 128);
-    return make_op($op, [xmm_reg($reg), $src], SSE2_PROC);
+    return { op=>$op, arg=>[xmm_reg($reg), $src], proc=>$sse2_proc };
   }
   return $self->bad_op();
 } # mmx_op
@@ -2408,8 +2277,10 @@ sub mmx_shift_imm {
   my ($self, $op, $mm) = @_;
   my $imm = $self->get_val(8);
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return make_op($op, [mmx_reg($mm),$imm], MMX_PROC)  }
-  elsif ($pre == 1) { return make_op($op, [xmm_reg($mm),$imm], SSE2_PROC) }
+  if    ($pre == 0) {
+    return { op=>$op, arg=>[mmx_reg($mm), $imm], proc=>$mmx_proc } }
+  elsif ($pre == 1) {
+    return { op=>$op, arg=>[xmm_reg($mm), $imm], proc=>$sse2_proc } }
   return $self->bad_op();
 } # mmx_shift_imm
 
@@ -2421,8 +2292,8 @@ sub sse_op2 {
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   my $arg = [xmm_reg($xmm), $self->modrm($mod, $rm, 128)];
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return make_op($op."s", $arg, SSE_PROC)  }
-  elsif ($pre == 2) { return make_op($op."d", $arg, SSE2_PROC) }
+  if    ($pre == 0) { return {op=>$op."s", arg=>$arg, proc=>$sse_proc}  }
+  elsif ($pre == 2) { return {op=>$op."d", arg=>$arg, proc=>$sse2_proc} }
   return $self->bad_op();
 } # sse_op2
 
@@ -2434,10 +2305,10 @@ sub sse_op4 {
   my ($mod, $xmm, $rm) = $self->split_next_byte();
   my $arg = [ xmm_reg($xmm), $self->modrm($mod, $rm, 128) ];
   my $pre = $self->mmx_prefix();
-  if    ($pre == 0) { return make_op($op."ps", $arg, SSE_PROC)  }
-  elsif ($pre == 1) { return make_op($op."pd", $arg, SSE2_PROC) }
-  elsif ($pre == 2) { return make_op($op."sd", $arg, SSE2_PROC) }
-  elsif ($pre == 3) { return make_op($op."ss", $arg, SSE_PROC)  }
+  if    ($pre == 0) { return {op=>$op."ps", arg=>$arg, proc=>$sse_proc}  }
+  elsif ($pre == 1) { return {op=>$op."pd", arg=>$arg, proc=>$sse2_proc} }
+  elsif ($pre == 2) { return {op=>$op."sd", arg=>$arg, proc=>$sse2_proc} }
+  elsif ($pre == 3) { return {op=>$op."ss", arg=>$arg, proc=>$sse_proc}  }
   return $self->bad_op();
 } # sse_op4
 

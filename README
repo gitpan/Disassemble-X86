@@ -1,4 +1,4 @@
-Disassemble::X86 version 0.10
+Disassemble::X86 version 0.11
 =============================
 
 
@@ -27,7 +27,7 @@ To install this module type the following:
 
 DEPENDENCIES
 
-None
+Test::More is needed to run the tests
 
 
 AUTHOR

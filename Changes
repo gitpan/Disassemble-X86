@@ -1,5 +1,9 @@
 Revision history for Perl extension Disassemble::X86.
 
+0.11  8 Aug 2002
+        - updated test script
+        - tweaked output format
+
 0.10  Mon Jul 15 2002
         - rewritten to produce tree-structured output
         - use autosplit

@@ -18,19 +18,9 @@ sub format_instr {
   my $op  = $tree->{op};
   my $arg = $tree->{arg};
 
-  if ($op =~ /^rep/ || $op eq "lock") {
-    $arg = $arg->[0];
-    if ($arg->{arg}) {
-      $arg = $self->format_instr($arg);
-      return "$op $arg";
-    }
-    else {
-      $arg = $self->format_instr($arg);
-      return "$op $arg .";
-    }
-  }
-  elsif ($op =~ /^loop/) {
-    $arg = format_arg($arg->[0]);
+  if ($op =~ /^rep/ || $op eq "lock" || $op =~ /^[c-gs]s:$/) {
+    $arg = $self->format_instr($arg->[0]);
+    $arg .= " ." unless $arg =~ / /;
     return "$op $arg";
   }
   elsif ($op eq "push") {
