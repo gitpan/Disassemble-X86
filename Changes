@@ -1,0 +1,6 @@
+Revision history for Perl extension Disassemble::X86.
+
+0.01  Fri Jun 28 09:38:11 2002
+	- original version; created by h2xs 1.21 with options
+		-AX -n Disassemble::X86
+

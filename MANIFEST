@@ -1,0 +1,9 @@
+CHECKSUMS.asc
+Changes
+MANIFEST
+Makefile.PL
+README
+X86.pm
+X86/MemRegion.pm
+disasm
+test.pl
