@@ -1,6 +1,12 @@
 Revision history for Perl extension Disassemble::X86.
 
-0.01  Fri Jun 28 09:38:11 2002
+0.10  Mon Jul 15 2002
+        - rewritten to produce tree-structured output
+        - use autosplit
+        - expanded test script
+        - bugfixes
+
+0.01  Fri Jun 28 2002
 	- original version; created by h2xs 1.21 with options
 		-AX -n Disassemble::X86
 
