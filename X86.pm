@@ -8,7 +8,7 @@ use integer;
 use Disassemble::X86::MemRegion;
 
 use vars qw( $VERSION );
-$VERSION = "0.11";
+$VERSION = "0.12";
 
 use vars qw( $max_instr_len );
 $max_instr_len = 15;
@@ -48,7 +48,15 @@ $sse2_proc   = 999;
 
 sub new {
   my ($class, %args) = @_;
-  my $self = bless { } => $class;
+  my $self = bless {
+      addr_size => 32,
+      data_size => 32,
+      asize     => undef, # address size override
+      dsize     => undef, # data size override
+      seg_pre   => undef,
+      mmx_pre   => 0,
+      def_proc  => 386,
+  } => $class;
 
   my $text = $args{text};
   unless (ref $text) {
@@ -59,15 +67,11 @@ sub new {
   }
   $self->{text} = $text;
 
-  $self->{addr_size} = $self->{data_size} = 32;
-  $self->set_def_proc();
   $self->addr_size($args{addr_size} || $args{size} || 32);
   $self->data_size($args{data_size} || $args{size} || 32);
 
   $self->pos( exists($args{pos}) ? $args{pos} : $text->start() );
   $self->set_format($args{format} || "Text");
-  $self->{seg_pre} = undef;
-  $self->{mmx_pre} = 0;
   return $self;
 } # new
 
@@ -215,7 +219,7 @@ sub next_long {
 
 sub get_byteval {
   my ($self, $size) = @_;
-  $size ||= $self->{data_size};
+  $size ||= $self->dsize();
   my $b = $self->next_byte();
   if ($b & 0x80) {
     if    ($size == 32) { $b |= 0xffffff00 }
@@ -226,7 +230,7 @@ sub get_byteval {
 
 sub get_val {
   my ($self, $size) = @_;
-  $size ||= $self->{data_size};
+  $size ||= $self->dsize();
   my $val;
   if    ($size == 32) { $val = $self->next_long() }
   elsif ($size == 16) { $val = $self->next_word() }
@@ -237,11 +241,12 @@ sub get_val {
 
 sub iflong_op {
   my ($self, $if, $else, $proc) = @_;
-  return { op=>($self->{data_size} == 32 ? $if : $else), proc=>$proc }
+  return { op=>($self->dsize() == 32 ? $if : $else), proc=>$proc }
 } # iflong_op
 
 sub op_r_rm {
   my ($self, $op, $size, $proc) = @_;
+  $size ||= $self->dsize();
   my ($mod, $reg, $rm) = $self->split_next_byte();
   my $src  = $self->modrm($mod, $rm, $size);
   my $dest = $self->get_reg($reg, $size);
@@ -250,6 +255,7 @@ sub op_r_rm {
 
 sub op_rm_r {
   my ($self, $op, $size, $proc) = @_;
+  $size ||= $self->dsize();
   my ($mod, $reg, $rm) = $self->split_next_byte();
   my $src  = $self->get_reg($reg, $size);
   my $dest = $self->modrm($mod, $rm, $size);
@@ -258,6 +264,7 @@ sub op_rm_r {
 
 sub mov_imm {
   my ($self, $size) = @_;
+  $size ||= $self->dsize();
   my ($mod, $op, $rm) = $self->split_next_byte();
   return $self->bad_op() unless $op == 0;
   my $dest = $self->modrm($mod, $rm, $size);
@@ -266,6 +273,7 @@ sub mov_imm {
 
 sub unary_op {
   my ($self, $size) = @_;
+  $size ||= $self->dsize();
   my ($mod, $op, $rm) = $self->split_next_byte();
   my $arg = $self->modrm($mod, $rm, $size);
   if ($op == 0) {
@@ -277,8 +285,8 @@ sub unary_op {
 
 sub abs_addr {
   my ($self, $data_size) = @_;
-  $data_size ||= $self->{data_size};
-  my $addr_size = $self->{addr_size};
+  $data_size ||= $self->dsize();
+  my $addr_size = $self->asize();
   my $addr = $self->get_val($addr_size);
   my $seg  = $self->seg_prefix();
   $addr = { op=>"seg", arg=>[$seg,$addr], size=>$addr_size } if $seg;
@@ -290,7 +298,7 @@ sub eipbyte {
   my $off = $self->next_byte();
   $off |= 0xffffff00 if $off & 0x80;
   $off += $self->{pos};
-  my $size = $self->{data_size};
+  my $size = $self->dsize();
   if    ($size == 32) { $off &= 0xffffffff }
   elsif ($size == 16) { $off &= 0xffff }
   else { die "can't happen" }
@@ -299,7 +307,7 @@ sub eipbyte {
 
 sub eipoff {
   my ($self, $op, $proc) = @_;
-  my $size = $self->{data_size};
+  my $size = $self->dsize();
   my $off;
   if ($size == 32) {
     $off = $self->next_long();
@@ -331,12 +339,19 @@ sub seg_prefix {
   return $self->seg_reg($prefix);
 } # seg_prefix
 
-sub toggle_size {
-  my ($size) = @_;
-  return 16 if $size eq 32;
-  return 32 if $size eq 16;
-  die "can't happen";
-} # toggle_size
+sub dsize {
+  my ($self) = @_;
+  my $dsize = $self->{dsize} || $self->{data_size};
+  $self->{dsize} = undef;
+  return $dsize;
+} # dsize
+
+sub asize {
+  my ($self) = @_;
+  my $asize = $self->{asize} || $self->{addr_size};
+  $self->{asize} = undef;
+  return $asize;
+} # asize
 
 1 # end X86.pm
 __END__
@@ -523,6 +538,10 @@ an instruction.
 Multiple discontinuous text segments are not supported. Use additional
 C<Disassemble::X86> objects if you need them.
 
+In some cases, this module will disassemble an opcode that would actually
+cause the processor to raise an illegal opcode exception. This may also be
+construed as a feature.
+
 Some of the more exotic instructions like cache control and MMX
 extensions have not been thoroughly tested. Please let me know if
 you find something that is broken.
@@ -598,29 +617,33 @@ sub _disasm {
   elsif ($byte == 0x61) { return $self->iflong_op("popad",  "popa",  186) }
   elsif ($byte == 0x62) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $bound = $self->modrm($mod, $rm, $self->{data_size}*2, {op=>""});
-    return { op=>"bound", arg=>[$self->get_reg($reg), $bound], proc=>186 };
+    my $size = $self->dsize();
+    my $bound = $self->modrm($mod, $rm, $size*2, {op=>""});
+    return {op=>"bound", arg=>[$self->get_reg($reg,$size), $bound], proc=>186};
   }
   elsif ($byte == 0x63) { return $self->op_rm_r("arpl", 16, 286) }
   elsif ($byte == 0x64) { return $self->seg_pre(4) } # fs
   elsif ($byte == 0x65) { return $self->seg_pre(5) } # gs
-  elsif ($byte == 0x66) { return $self->size_pre("data_size") }
-  elsif ($byte == 0x67) { return $self->size_pre("addr_size") }
+  elsif ($byte == 0x66) { return $self->dsize_pre() }
+  elsif ($byte == 0x67) { return $self->asize_pre() }
   elsif ($byte == 0x68) {
     return { op=>"push", arg=>[$self->get_val()], proc=>186 } }
   elsif ($byte == 0x69) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->get_reg($reg);
-    my $src  = $self->modrm($mod, $rm);
-    return { op=>"imul", arg=>[$dest,$src,$self->get_val()], proc=>186 };
+    my $size = $self->dsize();
+    my $dest = $self->get_reg($reg, $size);
+    my $src  = $self->modrm($mod, $rm, $size);
+    return { op=>"imul", arg=>[$dest,$src,$self->get_val($size)], proc=>186 };
   }
   elsif ($byte == 0x6a) {
     return { op=>"push", arg=>[$self->get_byteval()], proc=>186 } }
   elsif ($byte == 0x6b) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->get_reg($reg);
-    my $src  = $self->modrm($mod, $rm);
-    return { op=>"imul", arg=>[$dest,$src,$self->get_byteval()], proc=>186 };
+    my $size = $self->dsize();
+    my $dest = $self->get_reg($reg, $size);
+    my $src  = $self->modrm($mod, $rm, $size);
+    return { op=>"imul", arg=>[$dest, $src, $self->get_byteval($size)],
+        proc=>186 };
   }
   elsif ($byte == 0x6c) {
     my $dest = $self->str_dest(8);
@@ -647,13 +670,15 @@ sub _disasm {
   }
   elsif ($byte == 0x81) {
     my ($mod, $op, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_val()] };
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_val($size)] };
   }
   elsif ($byte == 0x83) {
     my ($mod, $op, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_byteval()] };
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    return { op=>$immed_grp[$op], arg=>[$dest, $self->get_byteval($size)] };
   }
   elsif ($byte == 0x84) { return $self->op_rm_r("test", 8) }
   elsif ($byte == 0x85) { return $self->op_rm_r("test") }
@@ -665,7 +690,7 @@ sub _disasm {
     my ($mod, $seg, $rm) = $self->split_next_byte();
     my $dest = $self->modrm($mod, $rm, 16);
     my $proc = ($seg >= 4) ? 386 : 86;
-    return { op=>"mov", arg=>[$dest,$self->seg_reg($seg)], proc=>$proc };
+    return { op=>"mov", arg=>[$dest, $self->seg_reg($seg)], proc=>$proc };
   }
   elsif ($byte == 0x8d) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
@@ -676,21 +701,23 @@ sub _disasm {
     my ($mod, $seg, $rm) = $self->split_next_byte();
     my $src  = $self->modrm($mod, $rm, 16);
     my $proc = ($seg >= 4) ? 386 : 86;
-    return { op=>"mov", arg=>[$self->seg_reg($seg),$src], proc=>$proc };
+    return { op=>"mov", arg=>[$self->seg_reg($seg), $src], proc=>$proc };
   }
   elsif ($byte == 0x8f) {
     my ($mod, $op, $rm) = $self->split_next_byte();
     return { op=>"pop", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($byte == 0x90) {
-    my $mmx_pre = $self->mmx_prefix();
-    return {op=>"nop"}   if $mmx_pre == 0;
-    return {op=>"pause"} if $mmx_pre == 3;
-    return $self->bad_op();
+    if ($self->{mmx_pre} == 3) {
+      $self->{mmx_pre} = 0;
+      return { op => "pause" };
+    }
+    return { op => "nop" };
   }
   elsif ($byte >= 0x91 && $byte <= 0x97) {
-    my $reg1 = $self->get_reg(0);
-    my $reg2 = $self->get_reg($byte & 7);
+    my $size = $self->dsize();
+    my $reg1 = $self->get_reg(0, $size);
+    my $reg2 = $self->get_reg($byte & 7, $size);
     return { op=>"xchg", arg=>[$reg1,$reg2] };
   }
   elsif ($byte == 0x98) { return $self->iflong_op("cwde", "cbw") }
@@ -704,23 +731,43 @@ sub _disasm {
   elsif ($byte == 0xa0) {
     return { op=>"mov", arg=>[$self->get_reg(0,8), $self->abs_addr(8)] } }
   elsif ($byte == 0xa1) {
-    return { op=>"mov", arg=>[$self->get_reg(0), $self->abs_addr()] } }
+    my $size = $self->dsize();
+    return {op=>"mov", arg=>[$self->get_reg(0,$size), $self->abs_addr($size)]};
+  }
   elsif ($byte == 0xa2) {
     return { op=>"mov", arg=>[$self->abs_addr(8), $self->get_reg(0,8)] } }
   elsif ($byte == 0xa3) {
-    return { op=>"mov", arg=>[$self->abs_addr(), $self->get_reg(0)] } }
+    my $size = $self->dsize();
+    return {op=>"mov", arg=>[$self->abs_addr($size), $self->get_reg(0,$size)]};
+  }
   elsif ($byte == 0xa4) {
-    return { op=>"movs", arg=>[$self->str_dest(8), $self->str_src(8)] } }
+    my $addr_size = $self->asize();
+    return { op=>"movs", arg=>[$self->str_dest(8, $addr_size),
+        $self->str_src(8, $addr_size)] }
+  }
   elsif ($byte == 0xa5) {
-    return { op=>"movs", arg=>[$self->str_dest(), $self->str_src()] } }
+    my $data_size = $self->dsize();
+    my $addr_size = $self->asize();
+    return { op=>"movs", arg=>[$self->str_dest($data_size, $addr_size),
+        $self->str_src($data_size, $addr_size)] }
+  }
   elsif ($byte == 0xa6) {
-    return { op=>"cmps", arg=>[$self->str_src(8), $self->str_dest(8)] } }
+    my $addr_size = $self->asize();
+    return { op=>"cmps", arg=>[$self->str_src(8, $addr_size),
+        $self->str_dest(8, $addr_size)] }
+  }
   elsif ($byte == 0xa7) {
-    return { op=>"cmps", arg=>[$self->str_src(), $self->str_dest()] } }
+    my $data_size = $self->dsize();
+    my $addr_size = $self->asize();
+    return { op=>"cmps", arg=>[$self->str_src($data_size, $addr_size),
+        $self->str_dest($data_size, $addr_size)] }
+  }
   elsif ($byte == 0xa8) {
     return { op=>"test", arg=>[$self->get_reg(0,8), $self->get_val(8)] } }
   elsif ($byte == 0xa9) {
-    return { op=>"test", arg=>[$self->get_reg(0), $self->get_val()] } }
+    my $size = $self->dsize();
+    return {op=>"test", arg=>[$self->get_reg(0,$size), $self->get_val($size)]}
+  }
   elsif ($byte == 0xaa) { return { op=>"stos", arg=>[$self->str_dest(8)] } }
   elsif ($byte == 0xab) { return { op=>"stos", arg=>[$self->str_dest()] } }
   elsif ($byte == 0xac) { return { op=>"lods", arg=>[$self->str_src(8)] } }
@@ -729,18 +776,19 @@ sub _disasm {
   elsif ($byte == 0xaf) { return { op=>"scas", arg=>[$self->str_dest()] } }
   elsif ($byte >= 0xb0 && $byte <= 0xb7) {
     my $reg = $self->get_reg($byte & 7, 8);
-    return { op=>"mov", arg=>[$reg,$self->get_val(8)] };
+    return { op=>"mov", arg=>[$reg, $self->get_val(8)] };
   }
   elsif ($byte >= 0xb8 && $byte <= 0xbf) {
-    my $reg = $self->get_reg($byte & 7);
-    return { op=>"mov", arg=>[$reg,$self->get_val()] };
+    my $size = $self->dsize();
+    my $reg = $self->get_reg($byte & 7, $size);
+    return { op=>"mov", arg=>[$reg, $self->get_val($size)] };
   }
   elsif ($byte == 0xc0) { return $self->shift_op(undef, 8) }
   elsif ($byte == 0xc1) { return $self->shift_op(undef) }
   elsif ($byte == 0xc2) {
-    return { op=>"ret", size=>$self->{data_size}, arg=>[$self->get_val(16)] } }
+    return { op=>"ret", size=>$self->dsize(), arg=>[$self->get_val(16)] } }
   elsif ($byte == 0xc3) {
-    return { op=>"ret", size=>$self->{data_size} } }
+    return { op=>"ret", size=>$self->dsize() } }
   elsif ($byte == 0xc4) { return $self->load_far("es") }
   elsif ($byte == 0xc5) { return $self->load_far("ds") }
   elsif ($byte == 0xc6) { return $self->mov_imm(8) }
@@ -752,9 +800,9 @@ sub _disasm {
   }
   elsif ($byte == 0xc9) { return { op=>"leave", proc=>186 } }
   elsif ($byte == 0xca) {
-    return {op=>"retf", size=>$self->{data_size}, arg=>[$self->get_val(16)]} }
+    return {op=>"retf", size=>$self->dsize(), arg=>[$self->get_val(16)]} }
   elsif ($byte == 0xcb) {
-    return {op=>"retf", size=>$self->{data_size}} }
+    return {op=>"retf", size=>$self->dsize()} }
   elsif ($byte == 0xcc) {
     return { op=>"int", arg=>[{ op=>"lit", arg=>[3], size=>8 }] } }
   elsif ($byte == 0xcd) { return {op=>"int", arg=>[$self->get_val(8)]} }
@@ -777,13 +825,13 @@ sub _disasm {
   elsif ($byte == 0xde) { return $self->esc_de() }
   elsif ($byte == 0xdf) { return $self->esc_df() }
   elsif ($byte == 0xe0) {
-    return {op=>"loopne", arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
+    return {op=>"loopne", arg=>[$self->eipbyte()], size=>$self->asize()} }
   elsif ($byte == 0xe1) {
-    return {op=>"loope",  arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
+    return {op=>"loope",  arg=>[$self->eipbyte()], size=>$self->asize()} }
   elsif ($byte == 0xe2) {
-    return {op=>"loop",   arg=>[$self->eipbyte()], size=>$self->{addr_size}} }
+    return {op=>"loop",   arg=>[$self->eipbyte()], size=>$self->asize()} }
   elsif ($byte == 0xe3) {
-    my $op = $self->{addr_size} == 32 ? "jecxz" : "jcxz";
+    my $op = $self->asize() == 32 ? "jecxz" : "jcxz";
     return { op=>$op, arg=>[$self->eipbyte()] };
   }
   elsif ($byte == 0xe4) {
@@ -811,20 +859,8 @@ sub _disasm {
     return { op=>"lock", arg=>[$op] };
   }
   elsif ($byte == 0xf1) { return $self->bad_op() }
-  elsif ($byte == 0xf2) {
-    $self->{mmx_pre} = 2;
-    my $op = $self->_disasm();
-    return $op unless $self->mmx_prefix() && $op;
-    return { op=>"repne", arg=>[$op], size=>$self->{addr_size} };
-  }
-  elsif ($byte == 0xf3) {
-    $self->{mmx_pre} = 3;
-    my $op = $self->_disasm();
-    return $op unless $self->mmx_prefix() && $op;
-    my $instr = $op->{op};
-    my $rep = ($instr eq "cmps" || $instr eq "scas") ? "repe" : "rep";
-    return { op=>$rep, arg=>[$op], size=>$self->{addr_size} };
-  }
+  elsif ($byte == 0xf2) { return $self->repne() }
+  elsif ($byte == 0xf3) { return $self->rep() }
   elsif ($byte == 0xf4) { return {op=>"hlt"} }
   elsif ($byte == 0xf5) { return {op=>"cmc"} }
   elsif ($byte == 0xf6) { return $self->unary_op(8) }
@@ -845,7 +881,7 @@ sub modrm {
   use warnings;
   use integer;
   my ($self, $mod, $rm, $data_size, @hint) = @_;
-  $data_size = $self->{data_size} unless defined $data_size;
+  $data_size = $self->dsize() unless defined $data_size;
 
   if ($mod == 3) {
     if (@hint) {
@@ -856,7 +892,7 @@ sub modrm {
   }
 
   my @addr;
-  my $addr_size = $self->{addr_size};
+  my $addr_size = $self->asize();
   my $seg = $self->seg_prefix();
 
   if ($addr_size == 32) {
@@ -926,7 +962,9 @@ sub arith_op {
   }
   elsif ($byte == 1) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    $op->{arg} = [ $self->modrm($mod, $rm), $self->get_reg($reg) ];
+    my $size = $self->dsize();
+    $op->{arg} = [ $self->modrm($mod, $rm, $size),
+        $self->get_reg($reg, $size) ];
   }
   elsif ($byte == 2) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
@@ -934,13 +972,16 @@ sub arith_op {
   }
   elsif ($byte == 3) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    $op->{arg} = [ $self->get_reg($reg), $self->modrm($mod, $rm) ];
+    my $size = $self->dsize();
+    $op->{arg} = [ $self->get_reg($reg, $size),
+        $self->modrm($mod, $rm, $size) ];
   }
   elsif ($byte == 4) {
     $op->{arg} = [ $self->get_reg(0, 8), $self->get_val(8) ];
   }
   elsif ($byte == 5) {
-    $op->{arg} = [ $self->get_reg(0), $self->get_val() ];
+    my $size = $self->dsize();
+    $op->{arg} = [ $self->get_reg(0, $size), $self->get_val($size) ];
   }
   else { die "can't happen" }
   return $op;
@@ -960,42 +1001,65 @@ sub shift_op {
   return { op=>$shift_grp[$op], arg=>[$arg,$dist] };
 } # shift_op
 
-sub size_pre {
-  use strict;
-  use warnings;
-  use integer;
-  my ($self, $size) = @_;
-  my $old_size = $self->{$size};
-  $self->{$size} = toggle_size($old_size);
-  $self->{mmx_pre} = 1 if $size eq "data_size";
-  my $op = $self->_disasm();
-  $self->{mmx_pre} = 0;
-  $self->{$size} = $old_size;
-  $op->{proc} = 386 if $op && ($op->{proc}||0) < 386;
-  return $op;
-} # size_pre
-
 sub seg_pre {
   use strict;
   use warnings;
   use integer;
   my ($self, $seg) = @_;
+  my $old_pre = $self->{seg_pre};
   $self->{seg_pre} = $seg;
-  my $op = $self->_disasm() or return;
+  my $op = $self->_disasm();
+  my $new_pre = $self->{seg_pre};
+  $self->{seg_pre} = $old_pre;
+  return unless $op;
   $op->{proc} = 386 if $seg>=4 && ($op->{proc}||0) < 386;
-  if (defined $self->{seg_pre}) {
-    $self->{seg_pre} = undef;
-    $op = { op=>$seg_regs[$seg].":", arg=>[$op], proc=>delete($op->{proc}) };
-  }
-  return $op;
+  return $op unless defined $new_pre;
+  return { op=>$seg_regs[$seg].":", arg=>[$op], proc=>delete($op->{proc}) };
 } # seg_pre
+
+sub dsize_pre {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self) = @_;
+  my $old_size = $self->{dsize};
+  $self->{dsize} = ($self->{data_size} == 32) ? 16 : 32;
+
+  my $old_pre = $self->{mmx_pre};
+  $self->{mmx_pre} = 1;
+  my $op = $self->_disasm();
+  $self->{mmx_pre} = $old_pre;
+
+  my $new_size = $self->{dsize};
+  $self->{dsize} = $old_size;
+  return $op unless $op;
+  $op->{proc} = 386 if ($op->{proc}||0) < 386;
+  return $op unless $new_size;
+  return { op=>"opsz", arg=>[$op], proc=>delete($op->{proc}) }
+} # dsize_pre
+
+sub asize_pre {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self) = @_;
+  my $old_size = $self->{asize};
+  $self->{asize} = ($self->{addr_size} == 32) ? 16 : 32;
+  my $op = $self->_disasm();
+  my $new_size = $self->{asize};
+  $self->{asize} = $old_size;
+  return $op unless $op;
+  $op->{proc} = 386 if ($op->{proc}||0) < 386;
+  return $op unless $new_size;
+  return { op=>"adsz", arg=>[$op], proc=>delete($op->{proc}) }
+} # asize_pre
 
 sub far_addr {
   use strict;
   use warnings;
   use integer;
   my ($self) = @_;
-  my $size = $self->{data_size};
+  my $size = $self->dsize();
   my $off = ($size == 32) ? $self->next_long() : $self->next_word();
   my $seg = $self->next_word();
   return { op=>"farlit", arg=>[$seg, $off], size=>$size+16 };
@@ -1007,8 +1071,9 @@ sub load_far {
   use integer;
   my ($self, $seg, $proc) = @_;
   my ($mod, $reg, $rm) = $self->split_next_byte();
-  my $src = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
-  return { op=>"l$seg", arg=>[$self->get_reg($reg), $src], proc=>$proc };
+  my $size = $self->dsize();
+  my $src = $self->modrm($mod, $rm, $size+16, {op=>"far"});
+  return { op=>"l$seg", arg=>[$self->get_reg($reg,$size), $src], proc=>$proc };
 } # load_far
 
 sub get_reg {
@@ -1016,7 +1081,7 @@ sub get_reg {
   use warnings;
   use integer;
   my ($self, $num, $size) = @_;
-  $size ||= $self->{data_size};
+  $size ||= $self->dsize();
   if ($size == 32) {
     return { op=>"reg", arg=>[$long_regs[$num], "dword"], size=>$size };
   }
@@ -1085,14 +1150,14 @@ sub esc_d9 {
     elsif ($op == 3) {
       return { op=>"fstp", arg=>[$self->modrm($mod, $rm, 32)], proc=>87 } }
     elsif ($op == 4) {
-      my $src = $self->modrm($mod, $rm, $self->{data_size} * 7);
+      my $src = $self->modrm($mod, $rm, $self->dsize() * 7);
       return { op=>"fldenv", arg=>[$src], proc=>87 };
     }
     elsif ($op == 5) {
       return { op=>"fldcw", arg=>[$self->modrm($mod, $rm, 16)], proc=>87 };
     }
     elsif ($op == 6) {
-      my $dest = $self->modrm($mod, $rm, $self->{data_size} * 7);
+      my $dest = $self->modrm($mod, $rm, $self->dsize() * 7);
       return { op=>"fnstenv", arg=>[$dest], proc=>87 };
     }
     elsif ($op == 7) {
@@ -1238,11 +1303,11 @@ sub esc_dd {
   elsif ($op == 3) {
     return { op=>"fstp", arg=>[$self->modrm($mod, $rm, 64)], proc=>87 } }
   elsif ($op == 4) {
-    my $src = $self->modrm($mod, $rm, 640+7*$self->{data_size});
+    my $src = $self->modrm($mod, $rm, 640+7*$self->dsize());
     return { op=>"frstor", arg=>[$src], proc=>87 };
   }
   elsif ($op == 6) {
-    my $dest = $self->modrm($mod, $rm, 640+7*$self->{data_size});
+    my $dest = $self->modrm($mod, $rm, 640+7*$self->dsize());
     return { op=>"fsave", arg=>[$dest], proc=>87 };
   }
   elsif ($op == 7) {
@@ -1301,6 +1366,42 @@ sub esc_df {
   return $self->bad_op();
 } # esc_df
 
+sub repne {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self) = @_;
+  my $old_pre = $self->{mmx_pre};
+  $self->{mmx_pre} = 2;
+  my $size = $self->{asize} || $self->{addr_size};
+  my $op = $self->_disasm();
+  my $new_pre = $self->{mmx_pre};
+  $self->{mmx_pre} = $old_pre;
+  return $op unless $new_pre;
+  $self->{asize} = undef;
+  return $op unless $op;
+  return { op=>"repne", arg=>[$op], size=>$size };
+} # repne
+
+sub rep {
+  use strict;
+  use warnings;
+  use integer;
+  my ($self) = @_;
+  my $old_pre = $self->{mmx_pre};
+  $self->{mmx_pre} = 3;
+  my $size = $self->{asize} || $self->{addr_size};
+  my $op = $self->_disasm();
+  my $new_pre = $self->{mmx_pre};
+  $self->{mmx_pre} = $old_pre;
+  return $op unless $new_pre;
+  $self->{asize} = undef;
+  return $op unless $op;
+  my $instr = $op->{op};
+  my $rep = ($instr eq "cmps" || $instr eq "scas") ? "repe" : "rep";
+  return { op=>$rep, arg=>[$op], size=>$size };
+} # rep
+
 sub opgrp_fe {
   use strict;
   use warnings;
@@ -1316,14 +1417,14 @@ sub opgrp_fe {
     return { op=>"call", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 3) {
-    my $dest = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
+    my $dest = $self->modrm($mod, $rm, $self->dsize()+16, {op=>"far"});
     return { op=>"call", arg=>[$dest] };
   }
   elsif ($op == 4) {
     return { op=>"jmp", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 5) {
-    my $dest = $self->modrm($mod, $rm, $self->{data_size}+16, {op=>"far"});
+    my $dest = $self->modrm($mod, $rm, $self->dsize()+16, {op=>"far"});
     return { op=>"jmp", arg=>[$dest] };
   }
   elsif ($op == 6) {
@@ -1336,9 +1437,9 @@ sub str_src {
   use strict;
   use warnings;
   use integer;
-  my ($self, $data_size) = @_;
-  $data_size ||= $self->{data_size};
-  my $addr_size = $self->{addr_size};
+  my ($self, $data_size, $addr_size) = @_;
+  $data_size ||= $self->dsize();
+  $addr_size ||= $self->asize();
   my $mem = $self->get_reg(6, $addr_size); # [e]si
   my $seg = $self->seg_prefix();
   $mem = { op=>"seg", arg=>[$seg, $mem], size=>$addr_size } if $seg;
@@ -1349,9 +1450,9 @@ sub str_dest {
   use strict;
   use warnings;
   use integer;
-  my ($self, $data_size) = @_;
-  $data_size ||= $self->{data_size};
-  my $addr_size = $self->{addr_size};
+  my ($self, $data_size, $addr_size) = @_;
+  $data_size ||= $self->dsize();
+  $addr_size ||= $self->asize();
   my $mem = $self->get_reg(7, $addr_size); # [e]di
   my $seg = $self->seg_reg(0); # no segment override with es:edi
   $mem = { op=>"seg", arg=>[$seg, $mem], size=>$addr_size };
@@ -1363,9 +1464,10 @@ sub xlat_op {
   use warnings;
   use integer;
   my ($self) = @_;
-  my $tbl = $self->get_reg(3, $self->{addr_size}); # [e]bx
+  my $size = $self->asize();
+  my $tbl = $self->get_reg(3, $size); # [e]bx
   my $seg = $self->seg_prefix();
-  $tbl = { op=>"seg", arg=>[$seg,$tbl], size=>$self->{addr_size} } if $seg;
+  $tbl = { op=>"seg", arg=>[$seg,$tbl], size=>$size } if $seg;
   $tbl = { op=>"mem", arg=>[$tbl], size=>8 };
   return { op=>"xlat", arg=>[$tbl] };
 } # xlat_op
@@ -1486,14 +1588,16 @@ sub twobyte {
   elsif ($byte == 0xa3) { return $self->op_rm_r("bt", undef, 386) }
   elsif ($byte == 0xa4) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    my $src  = $self->get_reg($reg);
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    my $src  = $self->get_reg($reg, $size);
     return { op=>"shld", arg=>[$dest, $src, $self->get_val(8)], proc=>386 };
   }
   elsif ($byte == 0xa5) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    my $src  = $self->get_reg($reg);
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    my $src  = $self->get_reg($reg, $size);
     return { op=>"shld", arg=>[$dest, $src, $self->get_reg(1,8)], proc=>386 };
   }
   elsif ($byte == 0xa8) {
@@ -1504,14 +1608,16 @@ sub twobyte {
   elsif ($byte == 0xab) { return $self->op_rm_r("bts", undef, 386) }
   elsif ($byte == 0xac) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    my $src  = $self->get_reg($reg);
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    my $src  = $self->get_reg($reg, $size);
     return { op=>"shrd", arg=>[$dest,$src,$self->get_val(8)], proc=>386 };
   }
   elsif ($byte == 0xad) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
-    my $dest = $self->modrm($mod, $rm);
-    my $src  = $self->get_reg($reg);
+    my $size = $self->dsize();
+    my $dest = $self->modrm($mod, $rm, $size);
+    my $src  = $self->get_reg($reg, $size);
     return { op=>"shrd", arg=>[$dest,$src,$self->get_reg(1,8)], proc=>386 };
   }
   elsif ($byte == 0xae) { return $self->twob_ae() }
@@ -1530,7 +1636,7 @@ sub twobyte {
   elsif ($byte == 0xb7) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 16);
-    return { op=>"movzx", arg=>[$self->get_reg($reg,32), $src], proc=>386 };
+    return { op=>"movzx", arg=>[$self->get_reg($reg), $src], proc=>386 };
   }
   elsif ($byte == 0xba) {
     my ($mod, $op, $rm) = $self->split_next_byte();
@@ -1549,7 +1655,7 @@ sub twobyte {
   elsif ($byte == 0xbf) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $src = $self->modrm($mod, $rm, 16);
-    return { op=>"movsx", arg=>[$self->get_reg($reg,32), $src], proc=>386 };
+    return { op=>"movsx", arg=>[$self->get_reg($reg), $src], proc=>386 };
   }
   elsif ($byte == 0xc0) { return $self->op_rm_r("xadd", 8, 486) }
   elsif ($byte == 0xc1) { return $self->op_rm_r("xadd", undef, 486) }
@@ -1651,7 +1757,7 @@ sub twob_01 {
   elsif ($op == 3) {
     return { op=>"lidt", arg=>[$self->modrm($mod, $rm, 48)], proc=>386 } }
   elsif ($op == 4) {
-    my $dest = $self->modrm($mod, $rm, ($mod == 3) ? undef : 16);
+    my $dest = $self->modrm($mod, $rm, ($mod == 3) ? $self->dsize() : 16);
     return { op=>"smsw", arg=>[$dest], proc=>286 };
   }
   elsif ($op == 6) {
@@ -2319,6 +2425,7 @@ sub mmx_prefix {
   my ($self) = @_;
   my $prefix = $self->{mmx_pre};
   $self->{mmx_pre} = 0;
+  $self->{dsize} = undef;
   return $prefix;
 } # mmx_prefix
 

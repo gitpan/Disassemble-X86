@@ -18,7 +18,9 @@ sub format_instr {
   my $op  = $tree->{op};
   my $arg = $tree->{arg};
 
-  if ($op =~ /^rep/ || $op eq "lock" || $op =~ /^[c-gs]s:$/) {
+  if ($op =~ /^rep/ || $op eq "lock"
+      || $op =~ /^[c-gs]s:$/ || $op =~ /^..sz$/)
+  {
     $arg = $self->format_instr($arg->[0]);
     $arg .= " ." unless $arg =~ / /;
     return "$op $arg";

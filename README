@@ -1,4 +1,4 @@
-Disassemble::X86 version 0.11
+Disassemble::X86 version 0.12
 =============================
 
 
@@ -19,6 +19,7 @@ INSTALLATION
 
 To install this module type the following:
 
+   cpansign -v
    perl Makefile.PL
    make
    make test
@@ -27,6 +28,7 @@ To install this module type the following:
 
 DEPENDENCIES
 
+Module::Signature is needed to check the signature
 Test::More is needed to run the tests
 
 
