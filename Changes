@@ -1,5 +1,9 @@
 Revision history for Perl extension Disassemble::X86.
 
+0.13  13 Sep 2002
+        - better branch hint support
+        - less bogosity in far pointer arguments
+
 0.12  25 Aug 2002
         - improved handling of opcode prefixes
 

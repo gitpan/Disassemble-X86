@@ -248,8 +248,8 @@ my @text = (
   [16, 0, "cmpneqss xmm1,dword[ss:bp+di+0x38]",   qw(f3 0f c2 4b 38 04)],
 
   # misc
-  [32, 32, "bound edi,[0xc6cd9909]",            qw(62 3d 09 99 cd c6)],
-  [16, 16, "bound si,[ss:bp+0x5d18]",           qw(62 b6 18 5d)],
+  [32, 32, "bound edi,qword[0xc6cd9909]",       qw(62 3d 09 99 cd c6)],
+  [16, 16, "bound si,dword[ss:bp+0x5d18]",      qw(62 b6 18 5d)],
   [32, 0,  "clflush [esi+ebp*8+0x1e415eed]",    qw(0f ae bc ee ed 5e 41 1e)],
   [32, 32, "cmove edx,dword[esi]",              qw(0f 44 16)],
   [16, 16, "cmovpo cx,word[0xafb2]",            qw(0f 4b 0e b2 af)],

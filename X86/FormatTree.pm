@@ -62,6 +62,10 @@ The length of the instruction, in bytes.
 The minimum processor model required, as described in
 L<Disassemble::X86>.
 
+=item prefix
+
+Set to 1 if this node is an opcode prefix such as C<rep> or C<lock>.
+
 =back
 
 The C<op> field commonly contains an opcode mnemonic. However, other

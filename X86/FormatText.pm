@@ -13,14 +13,17 @@ my %size_tag = (
     128 => "dqword",
 );
 
+my %far_size_tag = (
+    32  => "far",
+    48  => "far32",
+);
+
 sub format_instr {
   my ($self, $tree) = @_;
   my $op  = $tree->{op};
   my $arg = $tree->{arg};
 
-  if ($op =~ /^rep/ || $op eq "lock"
-      || $op =~ /^[c-gs]s:$/ || $op =~ /^..sz$/)
-  {
+  if ($tree->{prefix}) {
     $arg = $self->format_instr($arg->[0]);
     $arg .= " ." unless $arg =~ / /;
     return "$op $arg";
@@ -39,7 +42,7 @@ sub format_instr {
       return "push $arg";
     }
   }
-  elsif ($arg) {
+  elsif ($arg && @$arg) {
     $arg = join ",", map(format_arg($_), @$arg);
     return "$op $arg";
   }
@@ -64,21 +67,10 @@ sub format_arg {
   }
   elsif ($op eq "mem") {
     my $size = $tree->{size};
-    if (@$arg == 2) {
-      my $hint = $arg->[1]{op};
-      if ($hint eq "far" && $size) {
-        if    ($size == 32) { $size = "far" }
-        elsif ($size == 48) { $size = "far32" }
-        else                { $size = "" }
-      }
-      else { $size = "" }
-    }
-    else {
-      $size = $size_tag{$size} if $size;
-      $size ||= "";
-    }
+    my $tag = !$size ? ""
+        : ($tree->{far} ? $far_size_tag{$size} : $size_tag{$size}) || "";
     $arg = format_arg($arg->[0]);
-    return "$size\[$arg]";
+    return "$tag\[$arg]";
   }
   elsif ($op eq "seg") {
     my $seg = format_arg($arg->[0]);

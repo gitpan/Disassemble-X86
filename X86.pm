@@ -8,7 +8,7 @@ use integer;
 use Disassemble::X86::MemRegion;
 
 use vars qw( $VERSION );
-$VERSION = "0.12";
+$VERSION = "0.13";
 
 use vars qw( $max_instr_len );
 $max_instr_len = 15;
@@ -324,11 +324,21 @@ sub eipoff {
 sub jcond_op {
   my ($self, $cond, $addr, $proc) = @_;
   my $arg = [$addr];
+  my $op = { op=>"j".$cond_code[$cond & 0xf], arg=>[$addr] };
   my $seg = $self->{seg_pre};
-  if    (!$seg)     { }
-  elsif ($seg == 1) { push @$arg, {op=>"hint_no"};  $self->{seg_pre} = undef }
-  elsif ($seg == 3) { push @$arg, {op=>"hint_yes"}; $self->{seg_pre} = undef }
-  return { op=>"j" . $cond_code[$cond & 0xf], arg=>$arg, proc=>$proc };
+  if ($seg) {
+    # Branch hints. Someone please suggest some better mnemonics.
+    if ($seg == 1) { 
+      $self->{seg_pre} = undef;
+      return { op=>"hint_no", prefix=>1, arg=>[$op], proc=>$sse2_proc };
+    }
+    elsif ($seg == 3) {
+      $self->{seg_pre} = undef;
+      return { op=>"hint_yes", prefix=>1, arg=>[$op], proc=>$sse2_proc };
+    }
+  }
+  $op->{proc} = $proc;
+  return $op;
 } # jcond_op
 
 sub seg_prefix {
@@ -618,7 +628,8 @@ sub _disasm {
   elsif ($byte == 0x62) {
     my ($mod, $reg, $rm) = $self->split_next_byte();
     my $size = $self->dsize();
-    my $bound = $self->modrm($mod, $rm, $size*2, {op=>""});
+    return $self->bad_op() if $rm == 3;
+    my $bound = $self->modrm($mod, $rm, $size*2);
     return {op=>"bound", arg=>[$self->get_reg($reg,$size), $bound], proc=>186};
   }
   elsif ($byte == 0x63) { return $self->op_rm_r("arpl", 16, 286) }
@@ -856,7 +867,7 @@ sub _disasm {
     return { op=>"out", arg=>[$self->get_reg(2,16), $self->get_reg(0)] } }
   elsif ($byte == 0xf0) {
     my $op = $self->_disasm() or return;
-    return { op=>"lock", arg=>[$op] };
+    return { op=>"lock", prefix=>1, arg=>[$op] };
   }
   elsif ($byte == 0xf1) { return $self->bad_op() }
   elsif ($byte == 0xf2) { return $self->repne() }
@@ -880,16 +891,10 @@ sub modrm {
   use strict;
   use warnings;
   use integer;
-  my ($self, $mod, $rm, $data_size, @hint) = @_;
+  my ($self, $mod, $rm, $data_size) = @_;
   $data_size = $self->dsize() unless defined $data_size;
 
-  if ($mod == 3) {
-    if (@hint) {
-      $self->{error} = "bad address mode";
-      return "!badreg($rm,$data_size)";
-    }
-    return $self->get_reg($rm, $data_size) if $mod == 3;
-  }
+  return $self->get_reg($rm, $data_size) if $mod == 3;
 
   my @addr;
   my $addr_size = $self->asize();
@@ -946,7 +951,7 @@ sub modrm {
   my $addr = (@addr == 1) ? $addr[0] :
       { op=>"+", arg=>\@addr, size=>$addr_size };
   $addr = { op=>"seg", arg=>[$seg,$addr], size=>$addr_size } if $seg;
-  return  { op=>"mem", arg=>[$addr,@hint], size=>$data_size };
+  return  { op=>"mem", arg=>[$addr], size=>$data_size };
 } # modrm
 
 sub arith_op {
@@ -1014,7 +1019,8 @@ sub seg_pre {
   return unless $op;
   $op->{proc} = 386 if $seg>=4 && ($op->{proc}||0) < 386;
   return $op unless defined $new_pre;
-  return { op=>$seg_regs[$seg].":", arg=>[$op], proc=>delete($op->{proc}) };
+  return { op=>$seg_regs[$seg].":", prefix=>1, arg=>[$op],
+      proc=>delete($op->{proc}) };
 } # seg_pre
 
 sub dsize_pre {
@@ -1035,7 +1041,7 @@ sub dsize_pre {
   return $op unless $op;
   $op->{proc} = 386 if ($op->{proc}||0) < 386;
   return $op unless $new_size;
-  return { op=>"opsz", arg=>[$op], proc=>delete($op->{proc}) }
+  return { op=>"opsz", prefix=>1, arg=>[$op], proc=>delete($op->{proc}) };
 } # dsize_pre
 
 sub asize_pre {
@@ -1051,7 +1057,7 @@ sub asize_pre {
   return $op unless $op;
   $op->{proc} = 386 if ($op->{proc}||0) < 386;
   return $op unless $new_size;
-  return { op=>"adsz", arg=>[$op], proc=>delete($op->{proc}) }
+  return { op=>"adsz", prefix=>1, arg=>[$op], proc=>delete($op->{proc}) };
 } # asize_pre
 
 sub far_addr {
@@ -1071,8 +1077,10 @@ sub load_far {
   use integer;
   my ($self, $seg, $proc) = @_;
   my ($mod, $reg, $rm) = $self->split_next_byte();
+  return $self->bad_op() if $mod == 3;
   my $size = $self->dsize();
-  my $src = $self->modrm($mod, $rm, $size+16, {op=>"far"});
+  my $src = $self->modrm($mod, $rm, $size+16);
+  $src->{far} = 1;
   return { op=>"l$seg", arg=>[$self->get_reg($reg,$size), $src], proc=>$proc };
 } # load_far
 
@@ -1380,7 +1388,7 @@ sub repne {
   return $op unless $new_pre;
   $self->{asize} = undef;
   return $op unless $op;
-  return { op=>"repne", arg=>[$op], size=>$size };
+  return { op=>"repne", prefix=>1, arg=>[$op], size=>$size };
 } # repne
 
 sub rep {
@@ -1399,7 +1407,7 @@ sub rep {
   return $op unless $op;
   my $instr = $op->{op};
   my $rep = ($instr eq "cmps" || $instr eq "scas") ? "repe" : "rep";
-  return { op=>$rep, arg=>[$op], size=>$size };
+  return { op=>$rep, prefix=>1, arg=>[$op], size=>$size };
 } # rep
 
 sub opgrp_fe {
@@ -1417,14 +1425,18 @@ sub opgrp_fe {
     return { op=>"call", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 3) {
-    my $dest = $self->modrm($mod, $rm, $self->dsize()+16, {op=>"far"});
+    return $self->bad_op() if $mod == 3;
+    my $dest = $self->modrm($mod, $rm, $self->dsize()+16);
+    $dest->{far} = 1;
     return { op=>"call", arg=>[$dest] };
   }
   elsif ($op == 4) {
     return { op=>"jmp", arg=>[$self->modrm($mod, $rm)] };
   }
   elsif ($op == 5) {
-    my $dest = $self->modrm($mod, $rm, $self->dsize()+16, {op=>"far"});
+    return $self->bad_op() if $mod == 3;
+    my $dest = $self->modrm($mod, $rm, $self->dsize()+16);
+    $dest->{far} = 1;
     return { op=>"jmp", arg=>[$dest] };
   }
   elsif ($op == 6) {
